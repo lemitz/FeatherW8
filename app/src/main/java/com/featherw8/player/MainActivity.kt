@@ -28,12 +28,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -41,6 +44,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -139,7 +143,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -178,11 +181,18 @@ import com.featherw8.player.data.MediaLibraryRepository
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.data.PlayCountStore
 import com.featherw8.player.playback.PlaybackService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executor
@@ -209,8 +219,36 @@ private val AccentOptions = listOf(
 )
 private fun accentFor(id: String): Color = AccentOptions.firstOrNull { it.id == id }?.color ?: DefaultAccent
 private const val KNOWN_TRACK_IDS_KEY = "known_track_ids"
-private val ArtworkBitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
-    override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+private object ArtworkLoader {
+    private val bitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+    }
+    private val pendingLoads = mutableMapOf<String, Deferred<Bitmap?>>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val decodeSemaphore = Semaphore(2)
+
+    suspend fun load(context: Context, uri: Uri, targetPixels: Int, cacheKey: String): Bitmap? {
+        bitmapCache.get(cacheKey)?.let { return it }
+        val load = synchronized(pendingLoads) {
+            bitmapCache.get(cacheKey)?.let { return it }
+            pendingLoads[cacheKey] ?: scope.async(start = CoroutineStart.LAZY) {
+                decodeSemaphore.withPermit {
+                    bitmapCache.get(cacheKey) ?: runCatching {
+                        decodeSampledArtwork(context, uri, targetPixels)
+                    }.getOrNull()?.also { bitmapCache.put(cacheKey, it) }
+                }
+            }.also { deferred ->
+                pendingLoads[cacheKey] = deferred
+                deferred.invokeOnCompletion {
+                    synchronized(pendingLoads) {
+                        if (pendingLoads[cacheKey] === deferred) pendingLoads.remove(cacheKey)
+                    }
+                }
+                deferred.start()
+            }
+        }
+        return load.await()
+    }
 }
 
 private object CustomArtworkStore {
@@ -259,6 +297,24 @@ private fun buildArtistCollections(tracks: List<MusicTrack>): List<ArtistCollect
     .map { (key, artistTracks) -> ArtistCollection(key, artistTracks.first().artist, artistTracks.sortedBy { it.title.lowercase() }) }
     .sortedBy { it.name.lowercase() }
 
+private fun buildSmartPlaylistCollections(
+    tracks: List<MusicTrack>,
+    favorites: Set<String>,
+    playCount: (String) -> Int
+): SmartPlaylistCollections {
+    val mostPlayed = tracks.mapNotNull { track ->
+        val count = playCount(track.id)
+        if (count > 0) track to count else null
+    }.sortedByDescending { it.second }.take(10).map { it.first }
+
+    return SmartPlaylistCollections(
+        recent = tracks.sortedByDescending { it.dateAddedSeconds }.take(10),
+        highResolution = tracks.filter { it.isLikelyHiRes },
+        mostPlayed = mostPlayed,
+        favorites = tracks.filter { it.id in favorites }
+    )
+}
+
 private enum class DeviceProfile { NOTHING, REALME, GENERIC }
 private enum class AppPage {
     LIBRARY, PLAYLISTS, QUEUE, SETTINGS,
@@ -278,6 +334,12 @@ private enum class SortMode(val label: String) {
 }
 private enum class TrackAction { ADD_TO_PLAYLIST, INFO, RINGTONE, SHARE, DELETE }
 private data class UserPlaylist(val id: String, val name: String, val trackIds: List<String>)
+private data class SmartPlaylistCollections(
+    val recent: List<MusicTrack> = emptyList(),
+    val highResolution: List<MusicTrack> = emptyList(),
+    val mostPlayed: List<MusicTrack> = emptyList(),
+    val favorites: List<MusicTrack> = emptyList()
+)
 private data class PlaybackSnapshot(
     val mediaId: String? = null,
     val positionMs: Long = 0L,
@@ -482,8 +544,16 @@ private fun FeatherW8App(
     var selectedArtistKey by remember { mutableStateOf<String?>(null) }
     var artworkActionTrack by remember { mutableStateOf<MusicTrack?>(null) }
     val tabPagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
-    val albums = remember(tracks) { buildAlbumCollections(tracks) }
-    val artists = remember(tracks) { buildArtistCollections(tracks) }
+    var albums by remember { mutableStateOf<List<AlbumCollection>>(emptyList()) }
+    var artists by remember { mutableStateOf<List<ArtistCollection>>(emptyList()) }
+    LaunchedEffect(tracks) {
+        val trackSnapshot = tracks
+        val (nextAlbums, nextArtists) = withContext(Dispatchers.Default) {
+            buildAlbumCollections(trackSnapshot) to buildArtistCollections(trackSnapshot)
+        }
+        albums = nextAlbums
+        artists = nextArtists
+    }
     val latestAppPage by rememberUpdatedState(page)
 
     LaunchedEffect(tabPagerState) {
@@ -519,16 +589,23 @@ private fun FeatherW8App(
         scope.launch {
             try {
                 val scannedTracks = repository.scanInternalStorage()
-                val currentIds = scannedTracks.mapTo(mutableSetOf()) { it.id }
-                val previouslyKnown = preferences.getStringSet(KNOWN_TRACK_IDS_KEY, null)?.toSet()
-                val newTrackCount = if (previouslyKnown == null) {
-                    currentIds.size
-                } else {
-                    currentIds.count { it !in previouslyKnown }
+                val previouslyKnown = withContext(Dispatchers.IO) {
+                    preferences.getStringSet(KNOWN_TRACK_IDS_KEY, null)?.toSet()
+                }
+                val (currentIds, newTrackCount) = withContext(Dispatchers.Default) {
+                    val ids = scannedTracks.mapTo(mutableSetOf()) { it.id }
+                    val count = if (previouslyKnown == null) {
+                        ids.size
+                    } else {
+                        ids.count { it !in previouslyKnown }
+                    }
+                    ids to count
+                }
+                withContext(Dispatchers.IO) {
+                    preferences.edit().putStringSet(KNOWN_TRACK_IDS_KEY, currentIds).apply()
                 }
                 tracks = scannedTracks
                 selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
-                preferences.edit().putStringSet(KNOWN_TRACK_IDS_KEY, currentIds.toMutableSet()).apply()
                 if (manualScan) {
                     val message = if (newTrackCount == 0) "No new tracks found" else {
                         val unit = if (newTrackCount == 1) "track" else "tracks"
@@ -708,13 +785,14 @@ private fun FeatherW8App(
     }
 
     LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { PlayCountStore.getAll(context, emptyList()) }
         if (permissionGranted) scanLibrary(showProgress = false)
         else permissionLauncher.launch(audioPermission())
     }
 
     LaunchedEffect(playerClosedBySwipe) {
         if (playerClosedBySwipe) {
-            withFrameNanos { }
+            delay(48L)
             playerClosedBySwipe = false
         }
     }
@@ -791,8 +869,12 @@ private fun FeatherW8App(
     val bottomOverlayPadding = if (currentTrack != null) MiniPlayerContentOverlap else 0.dp
     val activeMediaId = playbackSnapshot.mediaId
     val isActuallyPlaying = playbackSnapshot.playing
-    val playCountValues = remember(tracks, playCountRevision) {
-        tracks.associate { track -> track.id to PlayCountStore.get(context, track.id) }
+    var playCountValues by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    LaunchedEffect(tracks, playCountRevision) {
+        val trackSnapshot = tracks
+        playCountValues = withContext(Dispatchers.IO) {
+            PlayCountStore.getAll(context, trackSnapshot.map { it.id })
+        }
     }
     val playCountReader: (String) -> Int = remember(playCountValues) {
         { id -> playCountValues[id] ?: 0 }
@@ -800,30 +882,40 @@ private fun FeatherW8App(
     val currentlyPlaying: (String) -> Boolean = remember(activeMediaId, isActuallyPlaying) {
         { id -> id == activeMediaId && isActuallyPlaying }
     }
-    val visibleTracks = remember(
+    val playCountsForSorting: Map<String, Int> =
+        if (sortMode == SortMode.PLAYS) playCountValues else emptyMap()
+    var visibleTracks by remember { mutableStateOf<List<MusicTrack>>(emptyList()) }
+    LaunchedEffect(
         tracks,
         minimumSizeKb,
         minimumDurationSeconds,
         query,
         sortMode,
-        playCountRevision.takeIf { sortMode == SortMode.PLAYS }
+        playCountsForSorting
     ) {
+        val trackSnapshot = tracks
         val minimumSizeBytes = (minimumSizeKb * 1024f).toLong()
-        val minimumWholeSeconds = minimumDurationSeconds.toLong()
+        val minDurationSeconds = minimumDurationSeconds
+        val minimumWholeSeconds = minDurationSeconds.toLong()
         val normalizedQuery = query.trim()
-        val filtered = tracks.filter { track ->
-            track.sizeBytes >= minimumSizeBytes &&
-                (minimumDurationSeconds <= 0f || (track.durationMs > 0L && track.durationMs / 1_000L >= minimumWholeSeconds)) &&
-                (normalizedQuery.isBlank() ||
-                    track.title.contains(normalizedQuery, ignoreCase = true) ||
-                    track.artist.contains(normalizedQuery, ignoreCase = true) ||
-                    track.album.contains(normalizedQuery, ignoreCase = true) ||
-                    track.mimeType.contains(normalizedQuery, ignoreCase = true))
-        }
-        when (sortMode) {
-            SortMode.TITLE -> filtered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
-            SortMode.ADDED -> filtered.sortedByDescending { it.dateAddedSeconds }
-            SortMode.PLAYS -> filtered.sortedByDescending { playCountReader(it.id) }
+        val sortModeSnapshot = sortMode
+        if (normalizedQuery.isNotBlank()) delay(80L)
+        visibleTracks = withContext(Dispatchers.Default) {
+            val filtered = trackSnapshot.filter { track ->
+                track.sizeBytes >= minimumSizeBytes &&
+                    (minDurationSeconds <= 0f ||
+                        (track.durationMs > 0L && track.durationMs / 1_000L >= minimumWholeSeconds)) &&
+                    (normalizedQuery.isBlank() ||
+                        track.title.contains(normalizedQuery, ignoreCase = true) ||
+                        track.artist.contains(normalizedQuery, ignoreCase = true) ||
+                        track.album.contains(normalizedQuery, ignoreCase = true) ||
+                        track.mimeType.contains(normalizedQuery, ignoreCase = true))
+            }
+            when (sortModeSnapshot) {
+                SortMode.TITLE -> filtered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+                SortMode.ADDED -> filtered.sortedByDescending { it.dateAddedSeconds }
+                SortMode.PLAYS -> filtered.sortedByDescending { playCountsForSorting[it.id] ?: 0 }
+            }
         }
     }
 
@@ -1076,69 +1168,81 @@ private fun FeatherW8App(
                         onAccentChange = onAccentChange,
                         bottomOverlayPadding = bottomOverlayPadding
                     )
-                    AppPage.ALBUMS -> AlbumsScreen(
-                        albums = albums,
-                        listState = albumsGridState,
-                        onOpenAlbum = { album ->
-                            selectedAlbumKey = album.key
-                            returnFromDetail = AppPage.ALBUMS
-                            page = AppPage.ALBUM_DETAIL
-                        },
-                        bottomOverlayPadding = bottomOverlayPadding
-                    )
-                    AppPage.ARTISTS -> ArtistsScreen(
-                        artists = artists,
-                        listState = artistsGridState,
-                        onOpenArtist = { artist ->
-                            selectedArtistKey = artist.key
-                            returnFromDetail = AppPage.ARTISTS
-                            page = AppPage.ARTIST_DETAIL
-                        },
-                        bottomOverlayPadding = bottomOverlayPadding
-                    )
-                    AppPage.ALBUM_DETAIL -> selectedAlbum?.let { album ->
-                        TrackCollectionDetailScreen(
-                            title = album.title,
-                            subtitle = "${album.artist} · ${album.tracks.size} tracks",
-                            heroTrack = album.tracks.firstOrNull(),
-                            tracks = album.tracks,
-                            listState = detailListState,
-                            onPlayAll = { playTracks(album.tracks, 0) },
-                            onPlayTrack = { index -> playTracks(album.tracks, index) },
-                            onTrackAction = { track, action -> handleTrackAction(track, action) },
+                    AppPage.ALBUMS -> CollectionPageEntrance(AppPage.ALBUMS) {
+                        AlbumsScreen(
+                            albums = albums,
+                            listState = albumsGridState,
+                            onOpenAlbum = { album ->
+                                selectedAlbumKey = album.key
+                                returnFromDetail = AppPage.ALBUMS
+                                page = AppPage.ALBUM_DETAIL
+                            },
                             bottomOverlayPadding = bottomOverlayPadding
                         )
-                    } ?: EmptyCard("Album unavailable", "It may have been removed by a library scan.")
-                    AppPage.ARTIST_DETAIL -> selectedArtist?.let { artist ->
-                        val albumCount = artist.tracks.map { it.albumId.takeIf { id -> id >= 0L }?.toString() ?: it.album.lowercase() }.distinct().size
-                        TrackCollectionDetailScreen(
-                            title = artist.name,
-                            subtitle = "${albumCount} albums · ${artist.tracks.size} tracks",
-                            heroTrack = artist.tracks.firstOrNull(),
-                            tracks = artist.tracks,
-                            listState = detailListState,
-                            onPlayAll = { playTracks(artist.tracks, 0) },
-                            onPlayTrack = { index -> playTracks(artist.tracks, index) },
-                            onTrackAction = { track, action -> handleTrackAction(track, action) },
+                    }
+                    AppPage.ARTISTS -> CollectionPageEntrance(AppPage.ARTISTS) {
+                        ArtistsScreen(
+                            artists = artists,
+                            listState = artistsGridState,
+                            onOpenArtist = { artist ->
+                                selectedArtistKey = artist.key
+                                returnFromDetail = AppPage.ARTISTS
+                                page = AppPage.ARTIST_DETAIL
+                            },
                             bottomOverlayPadding = bottomOverlayPadding
                         )
-                    } ?: EmptyCard("Artist unavailable", "They may no longer be in the library.")
-                    AppPage.PLAYLIST_DETAIL -> resolvedPlaylistDetail?.let { detail ->
-                        TrackCollectionDetailScreen(
-                            title = detail.title,
-                            subtitle = "${detail.tracks.size} tracks",
-                            heroTrack = detail.tracks.firstOrNull(),
-                            tracks = detail.tracks,
-                            listState = detailListState,
-                            onPlayAll = { playTracks(detail.tracks, 0) },
-                            onPlayTrack = { index -> playTracks(detail.tracks, index) },
-                            onTrackAction = { track, action -> handleTrackAction(track, action) },
-                            bottomOverlayPadding = bottomOverlayPadding,
-                            onManage = detail.userPlaylistId?.let { id ->
-                                { userPlaylists.firstOrNull { it.id == id }?.let { playlistForActions = it } }
-                            }
-                        )
-                    } ?: EmptyCard("Playlist unavailable", "It may have been removed.")
+                    }
+                    AppPage.ALBUM_DETAIL -> CollectionPageEntrance(selectedAlbumKey ?: AppPage.ALBUM_DETAIL) {
+                        selectedAlbum?.let { album ->
+                            TrackCollectionDetailScreen(
+                                title = album.title,
+                                subtitle = "${album.artist} · ${album.tracks.size} tracks",
+                                heroTrack = album.tracks.firstOrNull(),
+                                tracks = album.tracks,
+                                listState = detailListState,
+                                onPlayAll = { playTracks(album.tracks, 0) },
+                                onPlayTrack = { index -> playTracks(album.tracks, index) },
+                                onTrackAction = { track, action -> handleTrackAction(track, action) },
+                                bottomOverlayPadding = bottomOverlayPadding
+                            )
+                        } ?: EmptyCard("Album unavailable", "It may have been removed by a library scan.")
+                    }
+                    AppPage.ARTIST_DETAIL -> CollectionPageEntrance(selectedArtistKey ?: AppPage.ARTIST_DETAIL) {
+                        selectedArtist?.let { artist ->
+                            val albumCount = artist.tracks.map { it.albumId.takeIf { id -> id >= 0L }?.toString() ?: it.album.lowercase() }.distinct().size
+                            TrackCollectionDetailScreen(
+                                title = artist.name,
+                                subtitle = "${albumCount} albums · ${artist.tracks.size} tracks",
+                                heroTrack = artist.tracks.firstOrNull(),
+                                tracks = artist.tracks,
+                                listState = detailListState,
+                                onPlayAll = { playTracks(artist.tracks, 0) },
+                                onPlayTrack = { index -> playTracks(artist.tracks, index) },
+                                onTrackAction = { track, action -> handleTrackAction(track, action) },
+                                bottomOverlayPadding = bottomOverlayPadding
+                            )
+                        } ?: EmptyCard("Artist unavailable", "They may no longer be in the library.")
+                    }
+                    AppPage.PLAYLIST_DETAIL -> CollectionPageEntrance(
+                        resolvedPlaylistDetail?.userPlaylistId ?: resolvedPlaylistDetail?.title ?: AppPage.PLAYLIST_DETAIL
+                    ) {
+                        resolvedPlaylistDetail?.let { detail ->
+                            TrackCollectionDetailScreen(
+                                title = detail.title,
+                                subtitle = "${detail.tracks.size} tracks",
+                                heroTrack = detail.tracks.firstOrNull(),
+                                tracks = detail.tracks,
+                                listState = detailListState,
+                                onPlayAll = { playTracks(detail.tracks, 0) },
+                                onPlayTrack = { index -> playTracks(detail.tracks, index) },
+                                onTrackAction = { track, action -> handleTrackAction(track, action) },
+                                bottomOverlayPadding = bottomOverlayPadding,
+                                onManage = detail.userPlaylistId?.let { id ->
+                                    { userPlaylists.firstOrNull { it.id == id }?.let { playlistForActions = it } }
+                                }
+                            )
+                        } ?: EmptyCard("Playlist unavailable", "It may have been removed.")
+                    }
                 }
             }
         }
@@ -1165,53 +1269,55 @@ private fun FeatherW8App(
             )
         }
 
-        if (!playerClosedBySwipe) {
-            AnimatedVisibility(
-                visible = playerOpen && currentTrack != null,
-                modifier = Modifier.fillMaxSize(),
-                enter = slideInVertically(animationSpec = tween(190)) { it } + fadeIn(animationSpec = tween(120)),
-                exit = slideOutVertically(animationSpec = tween(190)) { it } + fadeOut(animationSpec = tween(120))
-            ) {
-                currentTrack?.let { activeTrack ->
-                    FullPlayerScreen(
-                        track = activeTrack,
-                        queue = queue,
-                        currentId = playbackSnapshot.mediaId,
-                        isFavorite = activeTrack.id in favoriteIds,
-                        snapshot = playbackSnapshot,
-                        controller = controller,
-                        onClose = {
-                            playerClosedBySwipe = false
-                            playerOpen = false
-                        },
-                        onQueue = {
-                            if (page != AppPage.QUEUE) returnFromQueue = page
-                            lastRootBackAt = 0L
-                            playerClosedBySwipe = false
-                            playerOpen = false
-                            page = AppPage.QUEUE
-                        },
-                        onSwipeClose = {
-                            playerClosedBySwipe = true
-                            playerOpen = false
-                        },
-                        onPlayQueueTrack = { index -> playTracks(queue, index) },
-                        onClearQueue = {
-                            queue = listOf(activeTrack)
-                            controller?.clearMediaItems()
-                            playTracks(listOf(activeTrack), 0)
-                        },
-                        onArtworkClick = { artworkActionTrack = it },
-                        onTrackInfo = { infoTrack = it },
-                        onToggleFavorite = {
-                            val next = favoriteIds.toMutableSet().apply {
-                                if (activeTrack.id in this) remove(activeTrack.id) else add(activeTrack.id)
-                            }
-                            persistFavorites(next)
-                        },
-                        onTrackAction = { handleTrackAction(activeTrack, it) }
-                    )
-                }
+        AnimatedVisibility(
+            visible = playerOpen && currentTrack != null,
+            modifier = Modifier.fillMaxSize(),
+            enter = slideInVertically(animationSpec = tween(190)) { it } + fadeIn(animationSpec = tween(120)),
+            exit = if (playerClosedBySwipe) {
+                ExitTransition.None
+            } else {
+                slideOutVertically(animationSpec = tween(190)) { it } + fadeOut(animationSpec = tween(120))
+            }
+        ) {
+            currentTrack?.let { activeTrack ->
+                FullPlayerScreen(
+                    track = activeTrack,
+                    queue = queue,
+                    currentId = playbackSnapshot.mediaId,
+                    isFavorite = activeTrack.id in favoriteIds,
+                    snapshot = playbackSnapshot,
+                    controller = controller,
+                    onClose = {
+                        playerClosedBySwipe = false
+                        playerOpen = false
+                    },
+                    onQueue = {
+                        if (page != AppPage.QUEUE) returnFromQueue = page
+                        lastRootBackAt = 0L
+                        playerClosedBySwipe = false
+                        playerOpen = false
+                        page = AppPage.QUEUE
+                    },
+                    onSwipeClose = {
+                        playerClosedBySwipe = true
+                        playerOpen = false
+                    },
+                    onPlayQueueTrack = { index -> playTracks(queue, index) },
+                    onClearQueue = {
+                        queue = listOf(activeTrack)
+                        controller?.clearMediaItems()
+                        playTracks(listOf(activeTrack), 0)
+                    },
+                    onArtworkClick = { artworkActionTrack = it },
+                    onTrackInfo = { infoTrack = it },
+                    onToggleFavorite = {
+                        val next = favoriteIds.toMutableSet().apply {
+                            if (activeTrack.id in this) remove(activeTrack.id) else add(activeTrack.id)
+                        }
+                        persistFavorites(next)
+                    },
+                    onTrackAction = { handleTrackAction(activeTrack, it) }
+                )
             }
         }
     }
@@ -1244,7 +1350,8 @@ private fun FeatherW8App(
         )
     }
     infoTrack?.let { track ->
-        TrackInfoDialog(track, PlayCountStore.get(context, track.id), onDismiss = { infoTrack = null })
+        val plays = remember(track.id, playCountRevision) { PlayCountStore.get(context, track.id) }
+        TrackInfoDialog(track, plays, onDismiss = { infoTrack = null })
     }
     tracksToAddToPlaylist?.let { selectedTracks ->
         PlaylistPickerDialog(
@@ -1720,12 +1827,19 @@ private fun PlaylistsScreen(
     onOpenUserPlaylist: (UserPlaylist) -> Unit,
     bottomOverlayPadding: Dp = 0.dp
 ) {
-    val recent = remember(tracks) { tracks.sortedByDescending { it.dateAddedSeconds }.take(10) }
-    val highResolution = remember(tracks) { tracks.filter { it.isLikelyHiRes } }
-    val mostPlayed = remember(tracks, playCount) {
-        tracks.filter { playCount(it.id) > 0 }.sortedByDescending { playCount(it.id) }.take(10)
+    var smartPlaylists by remember { mutableStateOf(SmartPlaylistCollections()) }
+    LaunchedEffect(tracks, favorites, playCount) {
+        val trackSnapshot = tracks
+        val favoritesSnapshot = favorites
+        val playCountSnapshot = playCount
+        smartPlaylists = withContext(Dispatchers.Default) {
+            buildSmartPlaylistCollections(trackSnapshot, favoritesSnapshot, playCountSnapshot)
+        }
     }
-    val favoritesList = remember(tracks, favorites) { tracks.filter { it.id in favorites } }
+    val recent = smartPlaylists.recent
+    val highResolution = smartPlaylists.highResolution
+    val mostPlayed = smartPlaylists.mostPlayed
+    val favoritesList = smartPlaylists.favorites
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -1813,6 +1927,22 @@ private fun SmartPlaylistRow(title: String, subtitle: String, count: Int, icon: 
             }
             Text(count.toString(), fontSize = 10.sp, color = MutedText)
         }
+    }
+}
+
+@Composable
+private fun CollectionPageEntrance(key: Any, content: @Composable () -> Unit) {
+    val visibility = remember(key) {
+        MutableTransitionState(false).apply { targetState = true }
+    }
+    AnimatedVisibility(
+        visibleState = visibility,
+        modifier = Modifier.fillMaxSize(),
+        enter = fadeIn(animationSpec = tween(170)) +
+            slideInVertically(animationSpec = tween(210)) { it / 24 },
+        exit = ExitTransition.None
+    ) {
+        Box(Modifier.fillMaxSize()) { content() }
     }
 }
 
@@ -1956,17 +2086,24 @@ private fun QueueScreen(
     onPlay: (Int) -> Unit,
     onOpenPlayer: () -> Unit,
     onClear: () -> Unit,
-    bottomOverlayPadding: Dp = 0.dp
+    bottomOverlayPadding: Dp = 0.dp,
+    modifier: Modifier = Modifier
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().background(AmoledBlack),
+        modifier = modifier.fillMaxSize().background(AmoledBlack),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp + bottomOverlayPadding),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         item {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Playback queue", color = MutedText, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = onClear) { Text("Clear", color = MutedText) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Playback queue", color = MutedText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.heightIn(min = 44.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("Clear", color = MutedText, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
             }
         }
         if (queue.isEmpty()) item { EmptyCard("Queue is empty", "Play a track from Library to start a queue.") }
@@ -2224,9 +2361,10 @@ private fun FullPlayerScreen(
         if (dismissing || settling) return
         dismissing = true
         settling = true
+        verticalDragActive = false
         val start = swipeOffsetPx
         scope.launch {
-            animateSwipeOffset(start, exitDistancePx) { swipeOffsetPx = it }
+            animateDismissOffset(start, exitDistancePx) { swipeOffsetPx = it }
             latestOnSwipeClose()
         }
     }
@@ -2268,166 +2406,178 @@ private fun FullPlayerScreen(
         beyondViewportPageCount = 0
     ) { pagerPage ->
         if (pagerPage == 0) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-                    .graphicsLayer {
-                        translationY = swipeOffsetPx
-                        alpha = if (playerHeightPx > 0) 1f - .08f * (swipeOffsetPx / playerHeightPx).coerceIn(0f, 1f) else 1f
+            Box(Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                        .graphicsLayer {
+                            translationY = swipeOffsetPx
+                            alpha = if (playerHeightPx > 0) 1f - .08f * (swipeOffsetPx / playerHeightPx).coerceIn(0f, 1f) else 1f
+                        }
+                        .onSizeChanged { playerHeightPx = it.height }
+                        .interactiveVerticalDrag(
+                            enabled = !dismissing && !settling,
+                            onStart = {
+                                if (dismissing || settling) false else {
+                                    swipeOffsetPx = 0f
+                                    verticalDragActive = true
+                                    true
+                                }
+                            },
+                            onDrag = { deltaY ->
+                                swipeOffsetPx = (swipeOffsetPx + deltaY).coerceIn(0f, exitDistancePx)
+                            },
+                            onEnd = { if (swipeOffsetPx >= closeThresholdPx) dismissBySwipe() else springBack() },
+                            onCancel = { springBack() }
+                        )
+                        .background(Brush.verticalGradient(listOf(Color(0xFF100307), AmoledBlack, AmoledBlack)))
+                        .systemBarsPadding()
+                        .padding(horizontal = 22.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close player") }
+                        Text("NOW PLAYING", color = MutedText, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                        Box {
+                            IconButton(onClick = { trackMenu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Track options") }
+                            TrackOptionsDropdown(expanded = trackMenu, onDismiss = { trackMenu = false }, showTrackInfo = true) { action -> trackMenu = false; onTrackAction(action) }
+                        }
                     }
-                    .onSizeChanged { playerHeightPx = it.height }
-                    .interactiveVerticalDrag(
-                        enabled = !dismissing && !settling,
-                        onStart = {
-                            if (dismissing || settling) false else {
-                                swipeOffsetPx = 0f
-                                verticalDragActive = true
-                                true
-                            }
-                        },
-                        onDrag = { deltaY ->
-                            swipeOffsetPx = (swipeOffsetPx + deltaY).coerceIn(0f, exitDistancePx)
-                        },
-                        onEnd = { if (swipeOffsetPx >= closeThresholdPx) dismissBySwipe() else springBack() },
-                        onCancel = { springBack() }
+
+                    Spacer(Modifier.height(10.dp))
+                    TrackArtwork(
+                        track,
+                        Modifier.fillMaxWidth().aspectRatio(1f).clickable { onArtworkClick(track) },
+                        RoundedCornerShape(26.dp),
+                        large = true
                     )
-                    .background(Brush.verticalGradient(listOf(Color(0xFF100307), AmoledBlack, AmoledBlack)))
-                    .systemBarsPadding()
-                    .padding(horizontal = 22.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close player") }
-                    Text("NOW PLAYING", color = MutedText, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    Box {
-                        IconButton(onClick = { trackMenu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Track options") }
-                        TrackOptionsDropdown(expanded = trackMenu, onDismiss = { trackMenu = false }, showTrackInfo = true) { action -> trackMenu = false; onTrackAction(action) }
-                    }
-                }
 
-                Spacer(Modifier.height(10.dp))
-                TrackArtwork(
-                    track,
-                    Modifier.fillMaxWidth().aspectRatio(1f).clickable { onArtworkClick(track) },
-                    RoundedCornerShape(26.dp),
-                    large = true
-                )
-
-                Box(Modifier.fillMaxWidth().heightIn(min = if (albumTitle == null) 78.dp else 96.dp).padding(top = 12.dp)) {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 62.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            track.title,
-                            maxLines = 1,
-                            overflow = TextOverflow.Clip,
-                            fontSize = 23.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.SansSerif,
-                            color = PrimaryText,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                                .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0, velocity = 34.dp)
-                                .clickable { onTrackInfo(track) }
-                        )
-                        Text(
-                            track.artist,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.SansSerif,
-                            color = MutedText,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                        if (albumTitle != null) {
+                    Box(Modifier.fillMaxWidth().heightIn(min = if (albumTitle == null) 78.dp else 96.dp).padding(top = 12.dp)) {
+                        Column(
+                            modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 62.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             Text(
-                                albumTitle,
+                                track.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Clip,
+                                fontSize = 23.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.SansSerif,
+                                color = PrimaryText,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                                    .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0, velocity = 34.dp)
+                                    .clickable { onTrackInfo(track) }
+                            )
+                            Text(
+                                track.artist,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                fontSize = 10.sp,
+                                fontSize = 13.sp,
                                 fontFamily = FontFamily.SansSerif,
-                                color = MutedText.copy(alpha = .8f),
-                                modifier = Modifier.padding(top = 3.dp)
+                                color = MutedText,
+                                modifier = Modifier.padding(top = 6.dp)
                             )
-                        }
-                    }
-                    IconButton(onClick = onToggleFavorite, modifier = Modifier.align(Alignment.CenterEnd).size(46.dp)) {
-                        Icon(
-                            if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                            contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
-                            tint = if (isFavorite) FeatherRed else Color.White,
-                            modifier = Modifier.size(27.dp)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(23.dp))
-                PlayerProgress(track = track, snapshot = snapshot, controller = controller)
-
-                Spacer(Modifier.height(22.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box {
-                        Box(
-                            modifier = Modifier.size(48.dp).combinedClickable(
-                                onClick = { cycleRepeatMode() },
-                                onLongClick = { modeMenu = true }
-                            ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(repeatIcon, contentDescription = "Playback mode: $repeatLabel", tint = if (repeatMode != Player.REPEAT_MODE_OFF || shuffled) FeatherRed else Color.White)
-                        }
-                        DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }, containerColor = CardBlack) {
-                            listOf("Repeat off", "Repeat all", "Repeat track", "Shuffle").forEach { label ->
-                                DropdownMenuItem(
-                                    text = { Text(label, color = if (repeatLabel == label) FeatherRed else PrimaryText) },
-                                    onClick = {
-                                        controller?.let {
-                                            when (label) {
-                                                "Repeat off" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_OFF }
-                                                "Repeat all" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_ALL }
-                                                "Repeat track" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_ONE }
-                                                else -> { it.repeatMode = Player.REPEAT_MODE_OFF; it.shuffleModeEnabled = true }
-                                            }
-                                        }
-                                        modeMenu = false
-                                    },
-                                    trailingIcon = { if (repeatLabel == label) Text("✓", color = FeatherRed) }
+                            if (albumTitle != null) {
+                                Text(
+                                    albumTitle,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.SansSerif,
+                                    color = MutedText.copy(alpha = .8f),
+                                    modifier = Modifier.padding(top = 3.dp)
                                 )
                             }
                         }
-                    }
-                    IconButton(onClick = { controller?.seekToPreviousMediaItem() }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous track", modifier = Modifier.size(27.dp))
-                    }
-                    Surface(
-                        modifier = Modifier.size(70.dp).clickable {
-                            if (snapshot.playing) controller?.pause() else controller?.play()
-                        },
-                        shape = CircleShape,
-                        color = Color.Transparent,
-                        border = androidx.compose.foundation.BorderStroke(2.dp, Color.White)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(if (snapshot.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = if (snapshot.playing) "Pause" else "Play", modifier = Modifier.size(31.dp))
+                        IconButton(onClick = onToggleFavorite, modifier = Modifier.align(Alignment.CenterEnd).size(46.dp)) {
+                            Icon(
+                                if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                                tint = if (isFavorite) FeatherRed else Color.White,
+                                modifier = Modifier.size(27.dp)
+                            )
                         }
                     }
-                    IconButton(onClick = { controller?.seekToNextMediaItem() }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.SkipNext, contentDescription = "Next track", modifier = Modifier.size(27.dp))
+
+                    Spacer(Modifier.height(23.dp))
+                    PlayerProgress(track = track, snapshot = snapshot, controller = controller)
+
+                    Spacer(Modifier.height(22.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Box {
+                            Box(
+                                modifier = Modifier.size(48.dp).combinedClickable(
+                                    onClick = { cycleRepeatMode() },
+                                    onLongClick = { modeMenu = true }
+                                ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(repeatIcon, contentDescription = "Playback mode: $repeatLabel", tint = if (repeatMode != Player.REPEAT_MODE_OFF || shuffled) FeatherRed else Color.White)
+                            }
+                            DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }, containerColor = CardBlack) {
+                                listOf("Repeat off", "Repeat all", "Repeat track", "Shuffle").forEach { label ->
+                                    DropdownMenuItem(
+                                        text = { Text(label, color = if (repeatLabel == label) FeatherRed else PrimaryText) },
+                                        onClick = {
+                                            controller?.let {
+                                                when (label) {
+                                                    "Repeat off" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_OFF }
+                                                    "Repeat all" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_ALL }
+                                                    "Repeat track" -> { it.shuffleModeEnabled = false; it.repeatMode = Player.REPEAT_MODE_ONE }
+                                                    else -> { it.repeatMode = Player.REPEAT_MODE_OFF; it.shuffleModeEnabled = true }
+                                                }
+                                            }
+                                            modeMenu = false
+                                        },
+                                        trailingIcon = { if (repeatLabel == label) Text("✓", color = FeatherRed) }
+                                    )
+                                }
+                            }
+                        }
+                        IconButton(onClick = { controller?.seekToPreviousMediaItem() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous track", modifier = Modifier.size(27.dp))
+                        }
+                        Surface(
+                            modifier = Modifier.size(70.dp).clickable {
+                                if (snapshot.playing) controller?.pause() else controller?.play()
+                            },
+                            shape = CircleShape,
+                            color = Color.Transparent,
+                            border = androidx.compose.foundation.BorderStroke(2.dp, Color.White)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(if (snapshot.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = if (snapshot.playing) "Pause" else "Play", modifier = Modifier.size(31.dp))
+                            }
+                        }
+                        IconButton(onClick = { controller?.seekToNextMediaItem() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Filled.SkipNext, contentDescription = "Next track", modifier = Modifier.size(27.dp))
+                        }
+                        IconButton(onClick = onQueue, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Open playback queue", modifier = Modifier.size(24.dp))
+                        }
                     }
-                    IconButton(onClick = onQueue, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Open playback queue", modifier = Modifier.size(24.dp))
-                    }
+                    Text(
+                        "${formatTrackFormat(track)}  ·  ${formatSize(track.sizeBytes)}  ·  ${formatBitrate(bitrateBps)}",
+                        color = MutedText,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.SansSerif,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
                 }
-                Text(
-                    "${formatTrackFormat(track)}  ·  ${formatSize(track.sizeBytes)}  ·  ${formatBitrate(bitrateBps)}",
-                    color = MutedText,
-                    fontSize = 9.sp,
-                    fontFamily = FontFamily.SansSerif,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                )
+                if (dismissing) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                    )
+                }
             }
         } else {
             QueueScreen(
@@ -2436,7 +2586,8 @@ private fun FullPlayerScreen(
                 playing = snapshot.playing,
                 onPlay = onPlayQueueTrack,
                 onOpenPlayer = { scope.launch { playerPagerState.animateScrollToPage(0) } },
-                onClear = onClearQueue
+                onClear = onClearQueue,
+                modifier = Modifier.systemBarsPadding()
             )
         }
     }
@@ -2617,7 +2768,7 @@ private fun MiniPlayerBar(
         positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: initialPositionMs
         if (isVisible && playing && controller != null) {
             while (true) {
-                delay(100L)
+                delay(250L)
                 positionMs = controller.currentPosition.coerceAtLeast(0L)
             }
         }
@@ -2758,6 +2909,14 @@ private suspend fun animateSwipeOffset(start: Float, target: Float, onValue: (Fl
     ) { value, _ -> onValue(value) }
 }
 
+private suspend fun animateDismissOffset(start: Float, target: Float, onValue: (Float) -> Unit) {
+    animate(
+        initialValue = start,
+        targetValue = target,
+        animationSpec = tween(durationMillis = 170, easing = FastOutLinearInEasing)
+    ) { value, _ -> onValue(value) }
+}
+
 @Composable
 private fun TrackArtwork(track: MusicTrack, size: Dp, shape: RoundedCornerShape, large: Boolean = false) {
     TrackArtwork(track, Modifier.size(size), shape, large)
@@ -2786,7 +2945,7 @@ private fun decodeSampledArtwork(context: Context, uri: Uri, targetPixels: Int):
 @Composable
 private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCornerShape, large: Boolean = false) {
     val context = LocalContext.current
-    val targetPixels = if (large) 1024 else 192
+    val targetPixels = if (large) 720 else 192
     val customArtworkUri = CustomArtworkStore.get(track.id)
     val defaultArtworkUri = remember(track.albumId) { if (track.albumId >= 0L) track.albumArtUri() else null }
     val artworkUri = customArtworkUri ?: defaultArtworkUri
@@ -2796,11 +2955,7 @@ private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCo
         if (artworkUri == null || cacheKey == null) {
             bitmap = null
         } else {
-            bitmap = ArtworkBitmapCache.get(cacheKey) ?: withContext(Dispatchers.IO) {
-                ArtworkBitmapCache.get(cacheKey) ?: runCatching {
-                    decodeSampledArtwork(context, artworkUri, targetPixels)
-                }.getOrNull()?.also { decoded -> ArtworkBitmapCache.put(cacheKey, decoded) }
-            }
+            bitmap = ArtworkLoader.load(context.applicationContext, artworkUri, targetPixels, cacheKey)
         }
     }
     Box(modifier.clip(shape).background(Brush.linearGradient(listOf(Color(0xFF522129), Color(0xFF111114)))), contentAlignment = Alignment.Center) { 

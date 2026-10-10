@@ -2753,8 +2753,9 @@ private fun MiniPlayerBar(
 ) {
     val cardShape = RoundedCornerShape(16.dp)
     val density = LocalDensity.current
-    val dismissThresholdPx = with(density) { 72.dp.toPx() }
-    val exitDistancePx = with(density) { 220.dp.toPx() }
+    val dismissThresholdPx = with(density) { 40.dp.toPx() }
+    val fallbackHeightPx = with(density) { 64.dp.toPx() }
+    val overscrollPx = with(density) { 48.dp.toPx() }
     val scope = rememberCoroutineScope()
     val accentColor = FeatherRed
     val latestOnDismiss by rememberUpdatedState(onDismiss)
@@ -2763,6 +2764,11 @@ private fun MiniPlayerBar(
     var dismissing by remember(track.id) { mutableStateOf(false) }
     var settling by remember(track.id) { mutableStateOf(false) }
     var positionMs by remember(track.id) { mutableLongStateOf(initialPositionMs) }
+    var cardHeightPx by remember { mutableFloatStateOf(0f) }
+    // The card's bottom edge sits right on top of the bottom navigation bar, so it is
+    // fully hidden (and fully transparent) once it has travelled its own height.
+    val hideDistancePx = if (cardHeightPx > 0f) cardHeightPx else fallbackHeightPx
+    val maxDragPx = hideDistancePx + overscrollPx
 
     LaunchedEffect(track.id, playing, durationMs, initialPositionMs, controller, isVisible) {
         positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: initialPositionMs
@@ -2793,6 +2799,7 @@ private fun MiniPlayerBar(
 
     Box(
         modifier = modifier.fillMaxWidth()
+            .onSizeChanged { cardHeightPx = it.height.toFloat() }
             .interactiveVerticalDrag(
                 enabled = isVisible && !dismissing && !settling,
                 onStart = {
@@ -2803,15 +2810,16 @@ private fun MiniPlayerBar(
                     }
                 },
                 onDrag = { deltaY ->
-                    swipeOffsetPx = (swipeOffsetPx + deltaY).coerceIn(0f, exitDistancePx)
+                    swipeOffsetPx = (swipeOffsetPx + deltaY).coerceIn(0f, maxDragPx)
                 },
                 onEnd = {
                     if (swipeOffsetPx >= dismissThresholdPx) {
                         dismissing = true
                         settling = true
                         val start = swipeOffsetPx
+                        val target = maxOf(start, hideDistancePx)
                         scope.launch {
-                            animateSwipeOffset(start, exitDistancePx) { swipeOffsetPx = it }
+                            animateDismissOffset(start, target, durationMillis = 130) { swipeOffsetPx = it }
                             latestOnDragActiveChange(false)
                             latestOnDismiss()
                         }
@@ -2825,7 +2833,7 @@ private fun MiniPlayerBar(
             .padding(horizontal = 10.dp, vertical = 5.dp)
             .graphicsLayer {
                 translationY = swipeOffsetPx
-                alpha = 1f - (swipeOffsetPx / exitDistancePx).coerceIn(0f, 1f)
+                alpha = 1f - (swipeOffsetPx / hideDistancePx).coerceIn(0f, 1f)
             }
             .clip(cardShape)
             .background(CardBlack)
@@ -2909,11 +2917,16 @@ private suspend fun animateSwipeOffset(start: Float, target: Float, onValue: (Fl
     ) { value, _ -> onValue(value) }
 }
 
-private suspend fun animateDismissOffset(start: Float, target: Float, onValue: (Float) -> Unit) {
+private suspend fun animateDismissOffset(
+    start: Float,
+    target: Float,
+    durationMillis: Int = 170,
+    onValue: (Float) -> Unit
+) {
     animate(
         initialValue = start,
         targetValue = target,
-        animationSpec = tween(durationMillis = 170, easing = FastOutLinearInEasing)
+        animationSpec = tween(durationMillis = durationMillis, easing = FastOutLinearInEasing)
     ) { value, _ -> onValue(value) }
 }
 

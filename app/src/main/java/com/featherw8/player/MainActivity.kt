@@ -697,27 +697,27 @@ private fun FeatherW8App(
             Toast.makeText(context, "Player is starting. Try again in a moment.", Toast.LENGTH_SHORT).show()
             return
         }
+        val index = startIndex.coerceIn(items.indices)
         queue = items
-        val mediaItems = items.map { track ->
-            MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(track.uri)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setAlbumTitle(track.album)
-                        .setArtworkUri(CustomArtworkStore.get(track.id) ?: track.albumArtUri())
-                        .build()
-                )
-                .build()
-        }
-        activePlayer.setMediaItems(mediaItems, startIndex.coerceIn(items.indices), 0L)
-        activePlayer.prepare()
-        activePlayer.play()
+        // Show the now playing screen right away with the track we are about to play:
+        // the real snapshot follows a few frames later with the media item transition.
+        // The playlist itself is built off the main thread - a few hundred MediaItem and
+        // MediaMetadata allocations plus a Uri.parse each are enough to starve the
+        // slide-in animation on the frame the user taps.
+        playbackSnapshot = playbackSnapshot.copy(
+            mediaId = items[index].id,
+            durationMs = items[index].durationMs,
+            positionMs = 0L
+        )
         lastRootBackAt = 0L
         playerClosedBySwipe = false
         playerOpen = true
+        scope.launch {
+            val mediaItems = withContext(Dispatchers.Default) { items.map { it.toMediaItem() } }
+            activePlayer.setMediaItems(mediaItems, index, 0L)
+            activePlayer.prepare()
+            activePlayer.play()
+        }
     }
 
     fun addTracksToQueue(selectedTracks: List<MusicTrack>) {
@@ -734,20 +734,7 @@ private fun FeatherW8App(
             Toast.makeText(context, "Selected tracks are already in the play queue", Toast.LENGTH_SHORT).show()
             return
         }
-        val mediaItems = additions.map { track ->
-            MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(track.uri)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setAlbumTitle(track.album)
-                        .setArtworkUri(CustomArtworkStore.get(track.id) ?: track.albumArtUri())
-                        .build()
-                )
-                .build()
-        }
+        val mediaItems = additions.map { it.toMediaItem() }
         if (hasExistingQueue) {
             activePlayer.addMediaItems(mediaItems)
             queue = queue + additions
@@ -865,9 +852,13 @@ private fun FeatherW8App(
 
     val currentTrack = queue.firstOrNull { it.id == playbackSnapshot.mediaId }
         ?: tracks.firstOrNull { it.id == playbackSnapshot.mediaId }
-    val bottomOverlayPadding = if (currentTrack != null) MiniPlayerContentOverlap else 0.dp
+    // While the now playing screen covers everything, keep the content padding and the
+    // "currently playing" marker frozen. Starting playback fires several player events
+    // (media item, buffering, playing, timeline), and each of them would otherwise
+    // re-layout the list behind the slide-in animation.
+    val bottomOverlayPadding = if (currentTrack != null && !playerOpen) MiniPlayerContentOverlap else 0.dp
     val activeMediaId = playbackSnapshot.mediaId
-    val isActuallyPlaying = playbackSnapshot.playing
+    val isActuallyPlaying = playbackSnapshot.playing && !playerOpen
     var playCountValues by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     LaunchedEffect(tracks, playCountRevision) {
         val trackSnapshot = tracks
@@ -2949,6 +2940,10 @@ private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCo
         if (artworkUri == null || cacheKey == null) {
             bitmap = null
         } else {
+            // The full screen cover is a few megabytes: uploading it mid-animation
+            // costs a frame, so it is loaded once the screen has settled - unless it
+            // is already in the cache (e.g. coming back from the queue page).
+            if (large && ArtworkBitmapCache.get(cacheKey) == null) delay(180L)
             bitmap = loadArtwork(context.applicationContext, artworkUri, targetPixels, cacheKey)
         }
     }
@@ -3005,6 +3000,9 @@ private fun rememberTrackBitrate(track: MusicTrack): TrackBitrate? {
     val context = LocalContext.current
     var bitrate by remember(track.id, track.uri) { mutableStateOf<TrackBitrate?>(null) }
     LaunchedEffect(track.id, track.uri, track.durationMs, track.sizeBytes) {
+        // The retriever opens and parses the file, which can take a moment; do not let
+        // the result recompose the player while it is still sliding in.
+        delay(220L)
         bitrate = withContext(Dispatchers.IO) {
             val embeddedRate = readTrackBitrate(context, track.uri)
             when {
@@ -3143,6 +3141,19 @@ private fun formatSize(sizeBytes: Long): String = when {
     }
     else -> "${(sizeBytes + 512L) / 1024L} KB"
 }
+
+private fun MusicTrack.toMediaItem(): MediaItem = MediaItem.Builder()
+    .setMediaId(id)
+    .setUri(uri)
+    .setMediaMetadata(
+        MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setAlbumTitle(album)
+            .setArtworkUri(CustomArtworkStore.get(id) ?: albumArtUri())
+            .build()
+    )
+    .build()
 
 private fun MusicTrack.albumArtUri(): Uri? {
     if (albumId < 0L) return null

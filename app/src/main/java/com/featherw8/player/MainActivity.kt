@@ -315,10 +315,18 @@ private fun buildSmartPlaylistCollections(
     )
 }
 
+private const val PlayerNowPlayingPage = 0
+private const val PlayerQueuePage = 1
+
 private enum class DeviceProfile { NOTHING, REALME, GENERIC }
 private enum class AppPage {
-    LIBRARY, PLAYLISTS, QUEUE, SETTINGS,
-    ALBUMS, ARTISTS, ALBUM_DETAIL, ARTIST_DETAIL, PLAYLIST_DETAIL
+    LIBRARY, PLAYLISTS, SETTINGS,
+    ALBUMS, ARTISTS, ALBUM_DETAIL, ARTIST_DETAIL, PLAYLIST_DETAIL,
+
+    // Kept only so instance state saved by an older build (which used a separate
+    // queue page) can still be restored. Nothing navigates here any more - the queue
+    // now lives on the second page of the player pager.
+    QUEUE
 }
 private data class AlbumCollection(val key: String, val title: String, val artist: String, val tracks: List<MusicTrack>)
 private data class ArtistCollection(val key: String, val name: String, val tracks: List<MusicTrack>)
@@ -492,7 +500,6 @@ private fun FeatherW8App(
     val preferences = remember(context) { context.getSharedPreferences("featherw8", Context.MODE_PRIVATE) }
 
     var page by rememberSaveable { mutableStateOf(AppPage.LIBRARY) }
-    var returnFromQueue by rememberSaveable { mutableStateOf(AppPage.LIBRARY) }
     var returnFromSettings by rememberSaveable { mutableStateOf(AppPage.LIBRARY) }
     var returnFromDetail by rememberSaveable { mutableStateOf(AppPage.PLAYLISTS) }
     val libraryListState = rememberLazyListState()
@@ -568,6 +575,10 @@ private fun FeatherW8App(
                 page = nextPage
             }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        if (page == AppPage.QUEUE) page = AppPage.LIBRARY
     }
 
     LaunchedEffect(page) {
@@ -963,7 +974,6 @@ private fun FeatherW8App(
         lastRootBackAt = 0L
         val destination = when (page) {
             AppPage.SETTINGS -> returnFromSettings
-            AppPage.QUEUE -> if (profile == DeviceProfile.NOTHING) returnFromQueue else AppPage.LIBRARY
             AppPage.ALBUMS, AppPage.ARTISTS -> AppPage.PLAYLISTS
             AppPage.ALBUM_DETAIL, AppPage.ARTIST_DETAIL, AppPage.PLAYLIST_DETAIL -> returnFromDetail
             else -> AppPage.LIBRARY
@@ -987,7 +997,7 @@ private fun FeatherW8App(
         } else {
             val now = SystemClock.elapsedRealtime()
             when (page) {
-                AppPage.SETTINGS, AppPage.QUEUE, AppPage.ALBUMS, AppPage.ARTISTS,
+                AppPage.SETTINGS, AppPage.ALBUMS, AppPage.ARTISTS,
                 AppPage.ALBUM_DETAIL, AppPage.ARTIST_DETAIL, AppPage.PLAYLIST_DETAIL -> goBackFromPage()
                 AppPage.LIBRARY, AppPage.PLAYLISTS -> {
                     if (lastRootBackAt > 0L && now - lastRootBackAt <= 2_000L) {
@@ -1061,7 +1071,6 @@ private fun FeatherW8App(
                         page = page,
                         title = when (page) {
                             AppPage.SETTINGS -> "Settings"
-                            AppPage.QUEUE -> "Queue"
                             AppPage.ALBUMS -> "Albums"
                             AppPage.ARTISTS -> "Artists"
                             AppPage.ALBUM_DETAIL -> selectedAlbum?.title ?: "Album"
@@ -1131,24 +1140,6 @@ private fun FeatherW8App(
                             )
                         }
                     }
-                    AppPage.QUEUE -> QueueScreen(
-                        queue = queue,
-                        currentId = playbackSnapshot.mediaId,
-                        playing = playbackSnapshot.playing,
-                        onPlay = { index -> playTracks(queue, index) },
-                        onOpenPlayer = {
-                            lastRootBackAt = 0L
-                            playerClosedBySwipe = false
-                            playerOpen = true
-                        },
-                        onClear = {
-                            val current = currentTrack
-                            queue = if (current == null) emptyList() else listOf(current)
-                            controller?.clearMediaItems()
-                            if (current != null) playTracks(listOf(current), 0)
-                        },
-                        bottomOverlayPadding = bottomOverlayPadding
-                    )
                     AppPage.SETTINGS -> SettingsScreen(
                         profile = profile,
                         minimumSizeKb = minimumSizeKb,
@@ -1290,13 +1281,6 @@ private fun FeatherW8App(
                     onClose = {
                         playerClosedBySwipe = false
                         playerOpen = false
-                    },
-                    onQueue = {
-                        if (page != AppPage.QUEUE) returnFromQueue = page
-                        lastRootBackAt = 0L
-                        playerClosedBySwipe = false
-                        playerOpen = false
-                        page = AppPage.QUEUE
                     },
                     onSwipeClose = {
                         playerClosedBySwipe = true
@@ -2086,12 +2070,11 @@ private fun QueueScreen(
     onPlay: (Int) -> Unit,
     onOpenPlayer: () -> Unit,
     onClear: () -> Unit,
-    bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize().background(AmoledBlack),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp + bottomOverlayPadding),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         item {
@@ -2308,7 +2291,6 @@ private fun FullPlayerScreen(
     snapshot: PlaybackSnapshot,
     controller: MediaController?,
     onClose: () -> Unit,
-    onQueue: () -> Unit,
     onSwipeClose: () -> Unit,
     onPlayQueueTrack: (Int) -> Unit,
     onClearQueue: () -> Unit,
@@ -2334,10 +2316,12 @@ private fun FullPlayerScreen(
     val albumTitle = track.album.takeUnless { it.isBlank() || it.equals("Unknown Album", ignoreCase = true) }
 
     LaunchedEffect(track.id) {
-        if (playerPagerState.currentPage != 0) playerPagerState.animateScrollToPage(0)
+        if (playerPagerState.currentPage != PlayerNowPlayingPage) {
+            playerPagerState.animateScrollToPage(PlayerNowPlayingPage)
+        }
     }
-    BackHandler(enabled = playerPagerState.currentPage == 1) {
-        scope.launch { playerPagerState.animateScrollToPage(0) }
+    BackHandler(enabled = playerPagerState.currentPage == PlayerQueuePage) {
+        scope.launch { playerPagerState.animateScrollToPage(PlayerNowPlayingPage) }
     }
 
     fun springBack() {
@@ -2553,7 +2537,10 @@ private fun FullPlayerScreen(
                         IconButton(onClick = { controller?.seekToNextMediaItem() }, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Filled.SkipNext, contentDescription = "Next track", modifier = Modifier.size(27.dp))
                         }
-                        IconButton(onClick = onQueue, modifier = Modifier.size(48.dp)) {
+                        IconButton(
+                            onClick = { scope.launch { playerPagerState.animateScrollToPage(PlayerQueuePage) } },
+                            modifier = Modifier.size(48.dp)
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Open playback queue", modifier = Modifier.size(24.dp))
                         }
                     }
@@ -2585,7 +2572,7 @@ private fun FullPlayerScreen(
                 currentId = currentId,
                 playing = snapshot.playing,
                 onPlay = onPlayQueueTrack,
-                onOpenPlayer = { scope.launch { playerPagerState.animateScrollToPage(0) } },
+                onOpenPlayer = { scope.launch { playerPagerState.animateScrollToPage(PlayerNowPlayingPage) } },
                 onClear = onClearQueue,
                 modifier = Modifier.systemBarsPadding()
             )

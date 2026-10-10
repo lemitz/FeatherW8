@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Size
 import android.util.LruCache
 import android.provider.MediaStore
 import android.provider.Settings
@@ -181,12 +182,7 @@ import com.featherw8.player.data.MediaLibraryRepository
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.data.PlayCountStore
 import com.featherw8.player.playback.PlaybackService
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -208,6 +204,7 @@ private val FeatherRed: Color
     @Composable get() = LocalFeatherAccent.current
 private val PrimaryText = Color(0xFFF5F5F6)
 private val MutedText = Color(0xFFA3A2A5)
+private val ArtworkPlaceholder = Color(0xFF31191E)
 private data class AccentOption(val id: String, val label: String, val color: Color)
 private val AccentOptions = listOf(
     AccentOption("red", "Crimson", Color(0xFFF23B50)),
@@ -219,35 +216,26 @@ private val AccentOptions = listOf(
 )
 private fun accentFor(id: String): Color = AccentOptions.firstOrNull { it.id == id }?.color ?: DefaultAccent
 private const val KNOWN_TRACK_IDS_KEY = "known_track_ids"
-private object ArtworkLoader {
-    private val bitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
-    }
-    private val pendingLoads = mutableMapOf<String, Deferred<Bitmap?>>()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val decodeSemaphore = Semaphore(2)
+private val ArtworkBitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+}
 
-    suspend fun load(context: Context, uri: Uri, targetPixels: Int, cacheKey: String): Bitmap? {
-        bitmapCache.get(cacheKey)?.let { return it }
-        val load = synchronized(pendingLoads) {
-            bitmapCache.get(cacheKey)?.let { return it }
-            pendingLoads[cacheKey] ?: scope.async(start = CoroutineStart.LAZY) {
-                decodeSemaphore.withPermit {
-                    bitmapCache.get(cacheKey) ?: runCatching {
-                        decodeSampledArtwork(context, uri, targetPixels)
-                    }.getOrNull()?.also { bitmapCache.put(cacheKey, it) }
-                }
-            }.also { deferred ->
-                pendingLoads[cacheKey] = deferred
-                deferred.invokeOnCompletion {
-                    synchronized(pendingLoads) {
-                        if (pendingLoads[cacheKey] === deferred) pendingLoads.remove(cacheKey)
-                    }
-                }
-                deferred.start()
-            }
+/** Only a few covers are decoded at a time; see TrackArtwork for the queueing. */
+private val ArtworkDecodeSemaphore = Semaphore(3)
+
+/**
+ * Loads a cover for the composable that is currently on screen. The work runs on
+ * Dispatchers.IO behind [ArtworkDecodeSemaphore] and is cancelled as soon as the row
+ * scrolls away, so a fast fling never leaves hundreds of stale decodes in flight.
+ */
+private suspend fun loadArtwork(context: Context, uri: Uri, targetPixels: Int, cacheKey: String): Bitmap? {
+    ArtworkBitmapCache.get(cacheKey)?.let { return it }
+    return withContext(Dispatchers.IO) {
+        ArtworkBitmapCache.get(cacheKey) ?: ArtworkDecodeSemaphore.withPermit {
+            ArtworkBitmapCache.get(cacheKey) ?: runCatching {
+                decodeSampledArtwork(context, uri, targetPixels)
+            }.getOrNull()?.also { bitmap -> ArtworkBitmapCache.put(cacheKey, bitmap) }
         }
-        return load.await()
     }
 }
 
@@ -1644,7 +1632,7 @@ private fun LibraryScreen(
                 contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp + bottomOverlayPadding),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(tracks, key = { it.id }) { track ->
+                items(tracks, key = { it.id }, contentType = { "track" }) { track ->
                     TrackRow(
                         track = track,
                         plays = playCount(track.id),
@@ -1688,12 +1676,11 @@ private fun TrackRow(
             Text(
                 track.title,
                 maxLines = 1,
-                overflow = TextOverflow.Clip,
+                overflow = TextOverflow.Ellipsis,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.SansSerif,
-                color = if (playing) FeatherRed else PrimaryText,
-                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0, velocity = 30.dp)
+                color = if (playing) FeatherRed else PrimaryText
             )
             Text(
                 "${track.artist} · ${formatDuration(track.durationMs)}",
@@ -2050,7 +2037,7 @@ private fun TrackCollectionDetailScreen(
         }
         item { SectionLabel("Tracks") }
         if (tracks.isEmpty()) item { EmptyCard("No tracks", "Add tracks from Library or scan internal storage.") }
-        items(tracks, key = { it.id }) { track ->
+        items(tracks, key = { it.id }, contentType = { "track" }) { track ->
             TrackRow(
                 track = track,
                 plays = 0,
@@ -2090,7 +2077,7 @@ private fun QueueScreen(
             }
         }
         if (queue.isEmpty()) item { EmptyCard("Queue is empty", "Play a track from Library to start a queue.") }
-        items(queue, key = { it.id }) { track ->
+        items(queue, key = { it.id }, contentType = { "track" }) { track ->
             TrackRow(
                 track = track,
                 plays = 0,
@@ -2923,6 +2910,13 @@ private fun TrackArtwork(track: MusicTrack, size: Dp, shape: RoundedCornerShape,
 }
 
 private fun decodeSampledArtwork(context: Context, uri: Uri, targetPixels: Int): Bitmap? {
+    // On Q+ MediaProvider keeps its own thumbnail cache and returns a bitmap that is
+    // already scaled down: one IPC instead of opening the audio file twice.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        runCatching {
+            context.contentResolver.loadThumbnail(uri, Size(targetPixels, targetPixels), null)
+        }.getOrNull()?.let { return it }
+    }
     val resolver = context.contentResolver
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     val boundsStream = resolver.openInputStream(uri) ?: return null
@@ -2950,15 +2944,15 @@ private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCo
     val defaultArtworkUri = remember(track.albumId) { if (track.albumId >= 0L) track.albumArtUri() else null }
     val artworkUri = customArtworkUri ?: defaultArtworkUri
     val cacheKey = artworkUri?.let { "$it@$targetPixels" }
-    var bitmap by remember(track.id, artworkUri, targetPixels) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(cacheKey) {
         if (artworkUri == null || cacheKey == null) {
             bitmap = null
         } else {
-            bitmap = ArtworkLoader.load(context.applicationContext, artworkUri, targetPixels, cacheKey)
+            bitmap = loadArtwork(context.applicationContext, artworkUri, targetPixels, cacheKey)
         }
     }
-    Box(modifier.clip(shape).background(Brush.linearGradient(listOf(Color(0xFF522129), Color(0xFF111114)))), contentAlignment = Alignment.Center) { 
+    Box(modifier.clip(shape).background(ArtworkPlaceholder), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
             androidx.compose.foundation.Image(
                 bitmap!!.asImageBitmap(),
@@ -3143,8 +3137,11 @@ private fun formatDuration(durationMs: Long): String {
 
 private fun formatSize(sizeBytes: Long): String = when {
     sizeBytes <= 0L -> "Unknown size"
-    sizeBytes >= 1024L * 1024L -> String.format("%.1f MB", sizeBytes / (1024.0 * 1024.0))
-    else -> String.format("%.0f KB", sizeBytes / 1024.0)
+    sizeBytes >= 1024L * 1024L -> {
+        val tenths = (sizeBytes * 10L + 524_288L) / 1_048_576L
+        "${tenths / 10L}.${tenths % 10L} MB"
+    }
+    else -> "${(sizeBytes + 512L) / 1024L} KB"
 }
 
 private fun MusicTrack.albumArtUri(): Uri? {

@@ -236,15 +236,20 @@ private val ArtworkDecodeSemaphore = Semaphore(3)
  */
 private suspend fun loadArtwork(context: Context, uri: Uri, targetPixels: Int, cacheKey: String): Bitmap? {
     ArtworkBitmapCache.get(cacheKey)?.let { return it }
+    val onDisk = CoverDiskCache.isCacheable(targetPixels)
     return withContext(Dispatchers.IO) {
         ArtworkBitmapCache.get(cacheKey) ?: ArtworkDecodeSemaphore.withPermit {
             ArtworkBitmapCache.get(cacheKey)
-                ?: CoverDiskCache.get(context, cacheKey)?.also { cover -> ArtworkBitmapCache.put(cacheKey, cover) }
+                ?: (if (onDisk) {
+                    CoverDiskCache.get(context, cacheKey)?.also { cover -> ArtworkBitmapCache.put(cacheKey, cover) }
+                } else {
+                    null
+                })
                 ?: runCatching {
                     decodeSampledArtwork(context, uri, targetPixels)
                 }.getOrNull()?.also { bitmap ->
                     ArtworkBitmapCache.put(cacheKey, bitmap)
-                    CoverDiskCache.put(context, cacheKey, bitmap)
+                    if (onDisk) CoverDiskCache.put(context, cacheKey, bitmap)
                 }
         }
     }
@@ -257,7 +262,6 @@ private suspend fun loadArtwork(context: Context, uri: Uri, targetPixels: Int, c
  * scrolling so it never competes with the frames the user is looking at.
  */
 private object CoverWarmer {
-    private const val COVER_TARGET_PIXELS = 192
     private val warmSemaphore = Semaphore(1)
     private var job: Job? = null
 
@@ -271,9 +275,11 @@ private object CoverWarmer {
                         continue
                     }
                     val uri = track.artworkUri ?: continue
-                    val key = "$uri@$COVER_TARGET_PIXELS"
+                    val key = CoverDiskCache.key(uri, CoverDiskCache.THUMB_PIXELS)
                     if (CoverDiskCache.contains(context, key)) continue
-                    val cover = runCatching { decodeSampledArtwork(context, uri, COVER_TARGET_PIXELS) }.getOrNull()
+                    val cover = runCatching {
+                        decodeSampledArtwork(context, uri, CoverDiskCache.THUMB_PIXELS)
+                    }.getOrNull()
                     if (cover != null) CoverDiskCache.put(context, key, cover)
                     delay(12L)
                 }
@@ -2985,7 +2991,7 @@ private fun decodeSampledArtwork(context: Context, uri: Uri, targetPixels: Int):
 @Composable
 private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCornerShape, large: Boolean = false) {
     val context = LocalContext.current
-    val targetPixels = if (large) 720 else 192
+    val targetPixels = if (large) 720 else CoverDiskCache.THUMB_PIXELS
     val customArtworkUri = CustomArtworkStore.get(track.id)
     val defaultArtworkUri = remember(track.albumId) { track.artworkUri }
     val artworkUri = customArtworkUri ?: defaultArtworkUri
@@ -3059,19 +3065,27 @@ private fun rememberTrackBitrate(track: MusicTrack): TrackBitrate? {
         // the result recompose the player while it is still sliding in.
         delay(220L)
         bitrate = withContext(Dispatchers.IO) {
-            val remembered = TrackInfoStore.getBitrate(context, track.id)
+            val remembered = TrackInfoStore.getBitrate(context, track.id, track.sizeBytes)
             if (remembered != null) {
                 TrackBitrate(remembered.first, estimated = remembered.second)
             } else {
                 val embeddedRate = readTrackBitrate(context, track.uri)
-                when {
+                val resolved = when {
                     embeddedRate != null -> TrackBitrate(embeddedRate, estimated = false)
                     track.durationMs > 0L && track.sizeBytes > 0L ->
                         TrackBitrate(track.sizeBytes * 8_000L / track.durationMs, estimated = true)
                     else -> null
-                }?.also { resolved ->
-                    TrackInfoStore.putBitrate(context, track.id, resolved.bitsPerSecond, resolved.estimated)
                 }
+                // Misses are stored as 0 bps as well, so files that cannot answer - DSD
+                // among them - are not parsed again every time the screen is opened.
+                TrackInfoStore.putBitrate(
+                    context,
+                    track.id,
+                    resolved?.bitsPerSecond ?: 0L,
+                    resolved?.estimated ?: false,
+                    track.sizeBytes
+                )
+                resolved
             }
         }
     }

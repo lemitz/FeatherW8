@@ -1,8 +1,19 @@
 package com.featherw8.player.data
 
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 
-/** A row from the primary (internal shared-storage) MediaStore volume. */
+private val DsdExtensions = setOf("dsf", "dff", "dsd")
+
+/**
+ * A row from the primary (internal shared-storage) MediaStore volume.
+ *
+ * Everything a list row or the player shows repeatedly is derived once: either lazily
+ * on first use, or eagerly through [precompute], which the scanner calls while it is
+ * already off the main thread. Deriving these in a composable would repeat the work on
+ * every recomposition while scrolling.
+ */
 data class MusicTrack(
     val id: String,
     val uri: Uri,
@@ -17,13 +28,46 @@ data class MusicTrack(
     val mimeType: String,
     val relativePath: String = ""
 ) {
-    val extension: String
-        get() = displayName.substringAfterLast('.', "").lowercase()
+    val extension: String by lazy { displayName.substringAfterLast('.', "").lowercase() }
 
-    val isDsd: Boolean
-        get() = extension in setOf("dsf", "dff", "dsd")
+    val isDsd: Boolean by lazy { extension in DsdExtensions }
 
     /** A conservative local-file estimate, used only to populate the Hi-Res smart list. */
-    val isLikelyHiRes: Boolean
-        get() = isDsd || (durationMs > 0L && sizeBytes * 1_000L / durationMs >= 200_000L)
+    val isLikelyHiRes: Boolean by lazy {
+        isDsd || (durationMs > 0L && sizeBytes * 1_000L / durationMs >= 200_000L)
+    }
+
+    val artworkUri: Uri? by lazy {
+        if (albumId < 0L) {
+            null
+        } else {
+            val volume = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.VOLUME_EXTERNAL_PRIMARY
+            } else {
+                "external"
+            }
+            Uri.parse("content://media/$volume/audio/albumart/$albumId")
+        }
+    }
+
+    val formatLabel: String by lazy {
+        extension.takeIf { it.isNotBlank() }?.uppercase()
+            ?: mimeType.substringAfter('/').takeIf { it.isNotBlank() }?.uppercase()
+            ?: "AUDIO"
+    }
+
+    val subtitle: String by lazy { "$artist · ${formatDuration(durationMs)}" }
+
+    val sizeLabel: String by lazy { formatSize(sizeBytes) }
+
+    /** Touches every derived value; called by the scanner on its background thread. */
+    fun precompute() {
+        extension
+        isDsd
+        isLikelyHiRes
+        artworkUri
+        formatLabel
+        subtitle
+        sizeLabel
+    }
 }

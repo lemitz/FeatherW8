@@ -181,8 +181,14 @@ import androidx.media3.session.SessionToken
 import com.featherw8.player.data.MediaLibraryRepository
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.data.PlayCountStore
+import com.featherw8.player.data.TrackInfoStore
+import com.featherw8.player.data.CoverDiskCache
+import com.featherw8.player.data.formatDuration
+import com.featherw8.player.data.formatSize
 import com.featherw8.player.playback.PlaybackService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -232,10 +238,52 @@ private suspend fun loadArtwork(context: Context, uri: Uri, targetPixels: Int, c
     ArtworkBitmapCache.get(cacheKey)?.let { return it }
     return withContext(Dispatchers.IO) {
         ArtworkBitmapCache.get(cacheKey) ?: ArtworkDecodeSemaphore.withPermit {
-            ArtworkBitmapCache.get(cacheKey) ?: runCatching {
-                decodeSampledArtwork(context, uri, targetPixels)
-            }.getOrNull()?.also { bitmap -> ArtworkBitmapCache.put(cacheKey, bitmap) }
+            ArtworkBitmapCache.get(cacheKey)
+                ?: CoverDiskCache.get(context, cacheKey)?.also { cover -> ArtworkBitmapCache.put(cacheKey, cover) }
+                ?: runCatching {
+                    decodeSampledArtwork(context, uri, targetPixels)
+                }.getOrNull()?.also { bitmap ->
+                    ArtworkBitmapCache.put(cacheKey, bitmap)
+                    CoverDiskCache.put(context, cacheKey, bitmap)
+                }
         }
+    }
+}
+
+/**
+ * Generates thumbnails for the library in the background, one cover at a time, so a
+ * later launch - and the parts of the list you have not reached yet - is served from
+ * [CoverDiskCache] instead of going through MediaProvider. It pauses while the list is
+ * scrolling so it never competes with the frames the user is looking at.
+ */
+private object CoverWarmer {
+    private const val COVER_TARGET_PIXELS = 192
+    private val warmSemaphore = Semaphore(1)
+    private var job: Job? = null
+
+    fun start(scope: CoroutineScope, context: Context, tracks: List<MusicTrack>, isScrolling: () -> Boolean) {
+        job?.cancel()
+        job = scope.launch(Dispatchers.IO) {
+            warmSemaphore.withPermit {
+                for (track in tracks) {
+                    if (isScrolling()) {
+                        delay(500L)
+                        continue
+                    }
+                    val uri = track.artworkUri ?: continue
+                    val key = "$uri@$COVER_TARGET_PIXELS"
+                    if (CoverDiskCache.contains(context, key)) continue
+                    val cover = runCatching { decodeSampledArtwork(context, uri, COVER_TARGET_PIXELS) }.getOrNull()
+                    if (cover != null) CoverDiskCache.put(context, key, cover)
+                    delay(12L)
+                }
+            }
+        }
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
     }
 }
 
@@ -605,6 +653,9 @@ private fun FeatherW8App(
                 }
                 tracks = scannedTracks
                 selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
+                CoverWarmer.start(scope, context.applicationContext, scannedTracks) {
+                    libraryListState.isScrollInProgress
+                }
                 if (manualScan) {
                     val message = if (newTrackCount == 0) "No new tracks found" else {
                         val unit = if (newTrackCount == 1) "track" else "tracks"
@@ -631,6 +682,10 @@ private fun FeatherW8App(
         permissionGranted = hasAudioPermission
         if (hasAudioPermission) scanLibrary(showProgress = false)
     }
+    DisposableEffect(context) {
+        onDispose { CoverWarmer.cancel() }
+    }
+
     DisposableEffect(context) {
         val activity = context as? MainActivity
         val callback: () -> Unit = { scanOnAppEntry() }
@@ -1674,7 +1729,7 @@ private fun TrackRow(
                 color = if (playing) FeatherRed else PrimaryText
             )
             Text(
-                "${track.artist} · ${formatDuration(track.durationMs)}",
+                track.subtitle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontSize = 10.sp,
@@ -1682,7 +1737,7 @@ private fun TrackRow(
                 color = MutedText,
                 modifier = Modifier.padding(top = 3.dp)
             )
-            Text(formatSize(track.sizeBytes), maxLines = 1, fontSize = 9.sp, color = MutedText, modifier = Modifier.padding(top = 3.dp))
+            Text(track.sizeLabel, maxLines = 1, fontSize = 9.sp, color = MutedText, modifier = Modifier.padding(top = 3.dp))
         }
         if (selectionMode) {
             SelectionCheckBox(checked = selected, modifier = Modifier.padding(horizontal = 5.dp))
@@ -2523,7 +2578,7 @@ private fun FullPlayerScreen(
                         }
                     }
                     Text(
-                        "${formatTrackFormat(track)}  ·  ${formatSize(track.sizeBytes)}  ·  ${formatBitrate(bitrateBps)}",
+                        "${track.formatLabel}  ·  ${formatSize(track.sizeBytes)}  ·  ${formatBitrate(bitrateBps)}",
                         color = MutedText,
                         fontSize = 9.sp,
                         fontFamily = FontFamily.SansSerif,
@@ -2932,7 +2987,7 @@ private fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedCo
     val context = LocalContext.current
     val targetPixels = if (large) 720 else 192
     val customArtworkUri = CustomArtworkStore.get(track.id)
-    val defaultArtworkUri = remember(track.albumId) { if (track.albumId >= 0L) track.albumArtUri() else null }
+    val defaultArtworkUri = remember(track.albumId) { track.artworkUri }
     val artworkUri = customArtworkUri ?: defaultArtworkUri
     val cacheKey = artworkUri?.let { "$it@$targetPixels" }
     var bitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(null) }
@@ -3004,22 +3059,24 @@ private fun rememberTrackBitrate(track: MusicTrack): TrackBitrate? {
         // the result recompose the player while it is still sliding in.
         delay(220L)
         bitrate = withContext(Dispatchers.IO) {
-            val embeddedRate = readTrackBitrate(context, track.uri)
-            when {
-                embeddedRate != null -> TrackBitrate(embeddedRate, estimated = false)
-                track.durationMs > 0L && track.sizeBytes > 0L ->
-                    TrackBitrate(track.sizeBytes * 8_000L / track.durationMs, estimated = true)
-                else -> null
+            val remembered = TrackInfoStore.getBitrate(context, track.id)
+            if (remembered != null) {
+                TrackBitrate(remembered.first, estimated = remembered.second)
+            } else {
+                val embeddedRate = readTrackBitrate(context, track.uri)
+                when {
+                    embeddedRate != null -> TrackBitrate(embeddedRate, estimated = false)
+                    track.durationMs > 0L && track.sizeBytes > 0L ->
+                        TrackBitrate(track.sizeBytes * 8_000L / track.durationMs, estimated = true)
+                    else -> null
+                }?.also { resolved ->
+                    TrackInfoStore.putBitrate(context, track.id, resolved.bitsPerSecond, resolved.estimated)
+                }
             }
         }
     }
     return bitrate
 }
-
-private fun formatTrackFormat(track: MusicTrack): String =
-    track.extension.takeIf { it.isNotBlank() }?.uppercase()
-        ?: track.mimeType.substringAfter('/').takeIf { it.isNotBlank() }?.uppercase()
-        ?: "AUDIO"
 
 private fun formatBitrate(bitrate: TrackBitrate?): String =
     bitrate?.takeIf { it.bitsPerSecond > 0L }?.let {
@@ -3037,7 +3094,7 @@ private fun TrackInfoDialog(track: MusicTrack, plays: Int, onDismiss: () -> Unit
                 InfoLine("Artist", track.artist)
                 InfoLine("Album", track.album)
                 InfoLine("File", track.displayName)
-                InfoLine("Format", formatTrackFormat(track))
+                InfoLine("Format", track.formatLabel)
                 InfoLine("Bitrate", formatBitrate(bitrateBps))
                 InfoLine("Duration", formatDuration(track.durationMs))
                 InfoLine("File size", formatSize(track.sizeBytes))
@@ -3127,21 +3184,6 @@ private fun navColors() = androidx.compose.material3.NavigationBarItemDefaults.c
     unselectedTextColor = MutedText
 )
 
-private fun formatDuration(durationMs: Long): String {
-    if (durationMs <= 0L) return "—:—"
-    val totalSeconds = durationMs / 1_000L
-    return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
-}
-
-private fun formatSize(sizeBytes: Long): String = when {
-    sizeBytes <= 0L -> "Unknown size"
-    sizeBytes >= 1024L * 1024L -> {
-        val tenths = (sizeBytes * 10L + 524_288L) / 1_048_576L
-        "${tenths / 10L}.${tenths % 10L} MB"
-    }
-    else -> "${(sizeBytes + 512L) / 1024L} KB"
-}
-
 private fun MusicTrack.toMediaItem(): MediaItem = MediaItem.Builder()
     .setMediaId(id)
     .setUri(uri)
@@ -3150,16 +3192,10 @@ private fun MusicTrack.toMediaItem(): MediaItem = MediaItem.Builder()
             .setTitle(title)
             .setArtist(artist)
             .setAlbumTitle(album)
-            .setArtworkUri(CustomArtworkStore.get(id) ?: albumArtUri())
+            .setArtworkUri(CustomArtworkStore.get(id) ?: artworkUri)
             .build()
     )
     .build()
-
-private fun MusicTrack.albumArtUri(): Uri? {
-    if (albumId < 0L) return null
-    val volume = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.VOLUME_EXTERNAL_PRIMARY else "external"
-    return Uri.parse("content://media/$volume/audio/albumart/$albumId")
-}
 
 private fun loadFavorites(preferences: android.content.SharedPreferences): Set<String> =
     preferences.getStringSet("favorites", emptySet())?.toSet().orEmpty()

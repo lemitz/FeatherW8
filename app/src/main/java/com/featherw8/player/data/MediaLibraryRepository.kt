@@ -133,7 +133,10 @@ class MediaLibraryRepository(context: Context) {
             }
         }
 
-        rows.values.sortedByDescending { it.dateAddedSeconds }
+        val tracks = rows.values.sortedByDescending { it.dateAddedSeconds }
+        // Derive every label the UI needs while we are still off the main thread.
+        tracks.forEach { it.precompute() }
+        tracks
     }
 
     private fun primaryAudioCollection(): Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

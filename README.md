@@ -57,7 +57,8 @@ Android has no DSD decoder, so FeatherW8 brings its own: a custom Media3 extract
 - Scans the phone's internal storage only — no SD cards or USB-OTG, and no source picker. The scan runs quietly whenever the app is opened; a manual scan in Settings always reports how many new tracks it found, including zero
 - Search by title, artist, album or format; sort by track title, date added or play count; every row shows the file size
 - Albums and Artists pages with artwork grids and track lists
-- DSD files (`.dsf`, `.dff`, `.dsd`) are listed even where Android's media indexer does not classify them as audio
+- DSD files (`.dsf`, `.dff`, `.dsd`) are listed even where Android's media indexer does not classify them as audio, and they look like any other track: title, artist, album, cover, duration and bit rate come from the file's own tags and header (the indexer knows none of them)
+- *Open with*: FeatherW8 is offered for audio files in file managers, DSD files included, and plays what you opened
 - Two filters to hide clutter: minimum file size (0–1500 KB) and minimum duration (0–40 s)
 - Long-press a track to select several, then add them to a playlist or the queue, share them or delete them (Android's own confirmation is kept). The per-track menu also offers file info and *Set as ringtone*
 
@@ -130,7 +131,9 @@ Output is PCM, not native DSD (there is no DoP). The container parsers and the D
 
 ## Installation
 
-Download `FeatherW8-v<version>-arm64-v8a-debug.apk` from the [Releases](https://github.com/lemitz/FeatherW8/releases) page and open it on the phone. These APKs are **debug-signed**, not signed with a release key, and the app is not on Google Play: Android will ask you to allow installs from the app you opened the file with. Requirements: Android 9 (API 28) or newer and a 64-bit ARM (`arm64-v8a`) device.
+Download `FeatherW8-v<version>-arm64-v8a.apk` from the [Releases](https://github.com/lemitz/FeatherW8/releases) page and open it on the phone. The app is not on Google Play, so Android will ask you to allow installs from the app you opened the file with. Every release is an optimised build signed with the project's own key, so a newer release installs over the old one and keeps your favorites, playlists and play counts. Requirements: Android 9 (API 28) or newer and a 64-bit ARM (`arm64-v8a`) device.
+
+Builds you make yourself are signed with your own debug key, so they cannot be installed over a release (uninstall the release first, or the other way round).
 
 On first start FeatherW8 asks for access to audio files; without it the library stays empty.
 
@@ -146,11 +149,21 @@ Requirements:
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-The debug APK lands in `app/build/outputs/apk/debug/app-debug.apk`. [BUILD_LOCAL.md](BUILD_LOCAL.md) has the complete setup, including a low-memory build script and the pinned Gradle, AGP and Kotlin versions. The test suite covers DSF block parsing and bit order, uncompressed DSDIFF parsing and the play counter.
+The debug APK lands in `app/build/outputs/apk/debug/app-debug.apk`; `:app:assembleRelease` builds the optimised (R8) one, which is what is released. [BUILD_LOCAL.md](BUILD_LOCAL.md) has the complete setup, including a low-memory build script and the pinned Gradle, AGP and Kotlin versions. The test suite covers DSF/DSDIFF parsing, DSD tag and cover reading, and the play counter.
 
-The [build workflow](.github/workflows/build.yml) runs for pushes to `main`, pull requests, version tags and manual dispatches. It runs the unit tests, builds the debug APK and uploads it as an artifact. **Only a pushed version tag publishes a GitHub Release** with the APK and the notes from `docs/release-notes/<tag>.md`; the tag has to match `versionName` in `app/build.gradle.kts`.
+The [build workflow](.github/workflows/build.yml) runs for pushes to `main`, pull requests, version tags and manual dispatches. It runs the unit tests, builds the release APK, signs it with the project key (kept in repository secrets, never in the repo) and uploads it as an artifact. **Only a pushed version tag publishes a GitHub Release** with the APK and the notes from `docs/release-notes/<tag>.md`; the tag has to match `appVersionName` in `app/build.gradle.kts`.
 
-To publish a release, bump `versionName` and `versionCode`, add `docs/release-notes/v<version>.md`, merge to `main` and then:
+### Versioning
+
+Versions are `MAJOR.MINOR.PATCH`, chosen by how much a change matters to someone who updates:
+
+- **PATCH** (1.3.0 → 1.3.1): bug fixes only; nothing to relearn.
+- **MINOR** (1.3.0 → 1.4.0): new features or visible behavior changes that keep the user's data working.
+- **MAJOR** (1.x → 2.0.0): a change that can break existing data or removes a feature.
+
+The version is written once, as `appVersionName` in `app/build.gradle.kts`; `versionCode` is derived from it (`1.3.0` → `10300`), so the two cannot drift apart.
+
+To publish a release, bump `appVersionName`, add `docs/release-notes/v<version>.md`, merge to `main` and then:
 
 ```bash
 git switch main
@@ -165,7 +178,7 @@ git push origin v<version>
 - Only the phone's internal storage is scanned — no SD cards, no USB-OTG.
 - DST-compressed DSDIFF is not supported, and DSD is always converted to PCM; native DSD / DoP output is not implemented.
 - No tag editor and no online metadata or cover lookup (the app has no network access). Covers come from the media index, or from an image you pick yourself.
-- Release APKs are debug-signed; there is no Play Store build.
+- Releases are signed with the project's own key and published on GitHub only; there is no Play Store build.
 
 ## Project structure
 
@@ -192,7 +205,7 @@ app/src/main/
   assets/third_party_licenses/   LGPL text, shipped inside the APK
 app/src/test/                    DsdExtractorTest, ActualPlayCounterTest
 docs/                            screenshots and release notes
-.github/workflows/build.yml      tests and debug APK on every push; release on v* tags
+.github/workflows/build.yml      tests and a signed release APK on every push; release on v* tags
 BUILD_LOCAL.md                   full local build instructions
 THIRD-PARTY-NOTICES.md           licenses of the bundled and linked components
 ```

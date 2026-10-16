@@ -3,6 +3,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// The only place a release version is written down (see "Versioning" in the README).
+// MAJOR.MINOR.PATCH; versionCode is derived from it so the two can never disagree.
+val appVersionName = "1.3.0"
+
+fun versionCodeOf(name: String): Int {
+    val (major, minor, patch) = name.split('.').map { it.toInt() }
+    return major * 10_000 + minor * 100 + patch // 1.3.0 -> 10300
+}
+
 android {
     namespace = "com.featherw8.player"
     compileSdk = 37
@@ -12,8 +21,8 @@ android {
         applicationId = "com.featherw8.player"
         minSdk = 28
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.2.0"
+        versionCode = versionCodeOf(appVersionName)
+        versionName = appVersionName
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -30,6 +39,41 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
+    }
+
+    // The project key comes from the environment (CI restores it from a secret), so it never lives in the
+    // repository. Without it - local builds, pull requests from forks - the standard Android debug key is
+    // used, which only means such an APK cannot be installed over one signed with the project key.
+    val keystorePath = System.getenv("FEATHERW8_KEYSTORE")
+    if (keystorePath != null) {
+        signingConfigs {
+            create("project") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("FEATHERW8_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("FEATHERW8_KEY_ALIAS")
+                keyPassword = System.getenv("FEATHERW8_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+    val appSigning = signingConfigs.findByName("project") ?: signingConfigs.getByName("debug")
+
+    buildTypes {
+        release {
+            // R8 and resource shrinking: a Compose app is much faster (and the APK several times smaller)
+            // than the unoptimised debug build, which also drags in the whole extended icon set.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = appSigning
+        }
+        debug {
+            signingConfig = appSigning
+        }
+    }
+
+    lint {
+        // Lint is not part of this project's checks; do not let its vital pass fail a release build.
+        checkReleaseBuilds = false
     }
 
     buildFeatures {

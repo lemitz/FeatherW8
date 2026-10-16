@@ -1,35 +1,82 @@
-# FeatherW8 — Android music player
+# FeatherW8
 
-A Kotlin/Jetpack Compose Android music player for the realme GT 6T and Nothing Phone 3a. The interface uses true-black AMOLED surfaces and selectable accent colors. Nothing devices use NDot by default, with a Nothing-only disable switch; track, artist, and album metadata use the standard sans-serif face. Realme styling remains automatic, including its Mini Capsule behavior.
+[![build](https://github.com/lemitz/FeatherW8/actions/workflows/build.yml/badge.svg)](https://github.com/lemitz/FeatherW8/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/lemitz/FeatherW8?include_prereleases)](https://github.com/lemitz/FeatherW8/releases)
+[![license](https://img.shields.io/github/license/lemitz/FeatherW8)](LICENSE)
 
-## Build
+A lightweight offline music player for Android, without accounts, ads, streaming or recommendations.
+It scans the audio on your phone's internal storage, lets you browse it by track, album and artist,
+and plays it through Media3. It also plays DSD files (DSF and DSDIFF) by converting them to PCM on the fly.
 
-- See [`BUILD_LOCAL.md`](BUILD_LOCAL.md) for the complete local setup and build steps.
-- The project uses Gradle Wrapper `9.4.1`, Android Gradle Plugin `9.2.0`, Kotlin Compose plugin `2.3.10`, SDK Platform 37, NDK `27.2.12479018`, and CMake `3.22.1`.
-- Build the signed debug APK with `./gradlew :app:assembleDebug` (Windows: `gradlew.bat :app:assembleDebug`). Run JVM tests with `./gradlew :app:testDebugUnitTest`.
-- The APK targets `arm64-v8a`, minimum Android 9 (API 28), target SDK 36.
+The interface is built with Jetpack Compose: true-black AMOLED surfaces, a choice of accent colors,
+a mini player that you can swipe away and a full player that you can pull down. A bit of
+device-specific polish (the Nothing NDot typeface, realme's Mini Capsule, a 120 Hz refresh-rate
+request) is applied automatically on supported phones and does nothing elsewhere.
 
-## Product behavior
+> Looking for the Windows terminal player? See [FeatherW8-CLI](https://github.com/lemitz/FeatherW8-CLI).
 
-- Launches directly into Library. Bottom navigation is Library (left) and Playlists (right). The Library/Playlists pager follows the horizontal finger drag, progressively revealing the neighboring page; completed swipes settle on it, while partial drags spring back. List positions are preserved.
-- Albums and Artists entry cards lead to artwork grids and track-list detail pages. Tapping a user or smart playlist opens its tracks first; playback starts only when a track or Play all is selected.
-- Scans the phone's primary shared-storage volume only. It has no source picker and does not scan SD cards or USB-OTG.
-- Settings retain only two filters: minimum file size from 0–1,500 KB in 50 KB steps, and minimum duration from 0–40 seconds in 5-second steps. The controls use the same slim progress track and round thumb as playback. Hi-Res/DSD inclusion is not user-configurable; the Full-play tracking row is removed.
-- Accent color can be set to Crimson, Violet, Ice blue, Mint, Amber, or Rose. The Nothing-only NDot toggle is not shown on Realme.
-- Library sorting is Track title, Date added, and Play count. Track rows show file size rather than the filename. Long-press any track in Library to enter multi-select mode, select all or cancel, then delete files, add them to a playlist or play queue, or share them. Android's deletion confirmation is retained for one or multiple files.
-- The app includes Media3 playback, mini/full player, queue, favorites, user playlists, smart playlists, and automatic playback-progress tracking. A play is counted only after more than 90% of the track was actually heard; seeking does not count as played time. Playback pauses when Android reports a headset becoming disconnected/noisy, so it does not continue through the phone speaker. Long track titles repeat in a smooth marquee; tapping the title opens file information only on the full playback screen, not from Library or track lists.
-- The full player slides down on Back and returns to the screen that opened it. Its Queue button opens the original app-level Queue screen; a left swipe shows a duplicate of the same queue UI inside the full player, and returning from that page reveals Now Playing again. Library and playlist scroll positions stay in memory while navigating; leaving Library for Playlists clears search. Two system-back presses exit from top-level screens.
-- The library silently rescans on app entry/foreground; automatic scans stay quiet unless new track IDs are found. A manual scan started in Settings shows a toast with the number of newly found tracks, including zero.
-- User playlists support rename and delete actions from a long-press; deleting a playlist leaves its audio files in the library.
-- The mini-player is drawn as an overlay over the already-laid-out screen. Its vertical drag moves the card directly with the finger in either direction, including reversing direction without lifting; the underlying Scaffold is never resized during the gesture. Scrollable screens reserve a fixed bottom inset while a track is active so their last item can scroll clear of the card. The card fades during a downward pull, springs back below the dismissal threshold, and on a completed swipe stops playback, clears the queue, and dismisses. Tapping still opens the full player.
-- The full player follows the finger in both vertical directions within one continuous drag, revealing the unchanged screen beneath it; the queue page remains opaque black. A partial pull springs back, while a completed swipe closes the player and leaves playback running.
-- Player seeking uses a compact circular thumb, artwork fills the cover area, and the repeat control changes icons for repeat-all, repeat-one, and shuffle. Repeat and shuffle selections are saved and restored when the playback service is recreated. The album is shown only when metadata provides one. Format, file size, and bitrate appear below the controls; tapping the title opens file info with bitrate. Tapping the cover offers Change artwork, where an image can be chosen from storage.
-- The app requests the supported display mode closest to 120 Hz at startup where available. On Nothing devices only, it reapplies that mode on resume and window focus to address the reported player/queue stutter; Realme's refresh-rate behavior is unchanged. Android and device power/display policies remain authoritative and may select a lower refresh rate.
-- Scroll rendering keeps list filtering/sorting memoized; album art is sampled to display-sized bitmaps and held in a bounded cache. Playback progress is updated locally rather than polling/recomposing the whole app.
-- Release version is `1.2.0` (`versionCode` 2). Nothing uses its system NDot typeface by default when available; the Settings switch can disable it on Nothing only. Track and artist names remain sans-serif. The Mini Capsule treatment is automatic and realme-only.
+## Features
+
+- **Library** with search, sorting by title, date added or play count, and albums/artists pages.
+  Long-press to select several tracks, then add them to a playlist or the queue, share them or delete them.
+- **Playlists:** your own playlists plus smart ones: recently added, Hi-Res, most played and favorites.
+- **Honest play counts.** A track counts as played only after you actually listened to more than 90 % of it;
+  seeking never adds listened time.
+- **Player** with a queue, repeat-one/all, shuffle, file info (format, size, bitrate) and custom cover art
+  picked from storage. Playback pauses when headphones are unplugged.
+- **Filters** to hide tiny files: minimum size and minimum duration.
+- **Fast lists:** covers are decoded off the main thread into a bounded memory cache and a disk cache that
+  survives restarts; bitrates and metadata are cached too.
+- **Six accent colors** on a true-black theme.
 
 ## DSD playback
 
-DSF and uncompressed DSDIFF/DFF are routed through a custom Media3 extractor and the bundled LGPL-2.1 DSD-Nexus DSDPCM engine. DSF channel blocks are deblocked and bit-reversed; DSD is converted to 88.2 kHz, 16-bit PCM for ordinary Android audio output. The JNI library is bundled for `arm64-v8a`. The upstream license is included in `app/src/main/assets/third_party_licenses/DSD-Nexus-LGPL-2.1.txt`.
+DSF and uncompressed DSDIFF/DFF files play like any other track. Android has no DSD decoder, so
+FeatherW8 brings its own:
 
-DST-compressed DSDIFF/DFF is not supported by this build. JVM tests cover DSF block parsing/bit order and uncompressed DSDIFF parsing; a host-native DSDPCM conversion smoke test also passed. No Android phone or emulator was attached during this build, so actual device playback, seeking, installation, and target-device behavior still need on-device verification.
+1. **A custom Media3 extractor** ([`DsdExtractor.kt`](app/src/main/java/com/featherw8/player/audio/DsdExtractor.kt))
+   sniffs and parses DSF and DSDIFF containers, de-interleaves DSF channel blocks, reverses their bit order,
+   and exposes a seekable stream to ExoPlayer.
+2. **A JNI bridge** ([`dsd_jni.cpp`](app/src/main/cpp/dsd_jni.cpp)) hands 1/75-second frames of DSD to
+3. **libdsdpcm**, the DSD-to-PCM engine from [DSD-Nexus](https://github.com/wichers/dsd-nexus),
+   which filters and decimates them to 88.2 kHz, 16-bit PCM that Android's normal audio output can play.
+
+Seeking restarts the converter at the nearest frame so its filters start clean. The container parsers and
+the DSF bit-order handling are covered by unit tests
+([`DsdExtractorTest.kt`](app/src/test/java/com/featherw8/player/audio/DsdExtractorTest.kt)).
+
+Limitations: DST-compressed DSDIFF is not supported, and output is PCM, not native DSD.
+
+## Install
+
+Download `FeatherW8-v*-arm64-v8a-debug.apk` from [Releases](https://github.com/lemitz/FeatherW8/releases)
+and open it on your phone. These APKs are **debug-signed**, not signed with a release key, so Android will
+ask you to allow installs from this source. Requirements: Android 9 (API 28) or newer, a 64-bit ARM
+(`arm64-v8a`) device.
+
+## Build
+
+See [BUILD_LOCAL.md](BUILD_LOCAL.md) for the full setup. In short, with JDK 21, Android SDK 37, NDK
+`27.2.12479018` and CMake `3.22.1` installed:
+
+```sh
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+The same command runs on every push in [GitHub Actions](.github/workflows/build.yml). Pushing a `v*` tag
+publishes the debug APK as a release.
+
+## Third-party software
+
+The DSD-to-PCM engine (`libdsdpcm` and `libsautil` from [DSD-Nexus](https://github.com/wichers/dsd-nexus))
+is licensed under the **GNU LGPL v2.1**. Its source is vendored in this repository and built into
+`libfeather_dsd.so`; the license text ships in the APK. Android and Kotlin libraries are Apache-2.0.
+Details: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## License
+
+FeatherW8's own code is released under the [MIT License](LICENSE).
+
+## About AI
+
+This project was developed with the help of AI coding assistants.

@@ -80,7 +80,12 @@ internal data class TrackBitrate(val bitsPerSecond: Long, val estimated: Boolean
 internal fun rememberTrackBitrate(track: MusicTrack): TrackBitrate? {
     val context = LocalContext.current
     var bitrate by remember(track.id, track.uri) { mutableStateOf<TrackBitrate?>(null) }
+    // Some formats state their exact bit rate (DSD: sample rate x channels); nothing to measure.
+    val stated = remember(track.id, track.bitrateBps) {
+        track.bitrateBps.takeIf { it > 0L }?.let { TrackBitrate(it, estimated = false) }
+    }
     LaunchedEffect(track.id, track.uri, track.durationMs, track.sizeBytes) {
+        if (stated != null) return@LaunchedEffect
         // The retriever opens and parses the file, which can take a moment; do not let
         // the result recompose the player while it is still sliding in.
         delay(220L)
@@ -109,7 +114,7 @@ internal fun rememberTrackBitrate(track: MusicTrack): TrackBitrate? {
             }
         }
     }
-    return bitrate
+    return stated ?: bitrate
 }
 
 internal fun formatBitrate(bitrate: TrackBitrate?): String =
@@ -128,7 +133,7 @@ internal fun TrackInfoDialog(track: MusicTrack, plays: Int, onDismiss: () -> Uni
                 InfoLine("Artist", track.artist)
                 InfoLine("Album", track.album)
                 InfoLine("File", track.displayName)
-                InfoLine("Format", track.formatLabel)
+                InfoLine("Format", listOf(track.formatLabel, track.formatDetail).filter { it.isNotBlank() }.joinToString(" · "))
                 InfoLine("Bitrate", formatBitrate(bitrateBps))
                 InfoLine("Duration", formatDuration(track.durationMs))
                 InfoLine("File size", formatSize(track.sizeBytes))

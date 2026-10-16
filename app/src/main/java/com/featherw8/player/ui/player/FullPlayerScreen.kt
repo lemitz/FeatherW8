@@ -369,7 +369,12 @@ internal fun FullPlayerScreen(
                         }
                     }
                     Text(
-                        "${track.formatLabel}  ·  ${formatSize(track.sizeBytes)}  ·  ${formatBitrate(bitrateBps)}",
+                        listOf(
+                            track.formatLabel,
+                            track.formatDetail.substringBefore(" · "),
+                            formatSize(track.sizeBytes),
+                            formatBitrate(bitrateBps)
+                        ).filter { it.isNotBlank() }.joinToString("  ·  "),
                         color = MutedText,
                         fontSize = 9.sp,
                         fontFamily = FontFamily.SansSerif,

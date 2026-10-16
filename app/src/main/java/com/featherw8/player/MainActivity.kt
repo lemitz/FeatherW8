@@ -1038,7 +1038,8 @@ private fun FeatherW8App(
             val now = SystemClock.elapsedRealtime()
             when (page) {
                 AppPage.SETTINGS, AppPage.ALBUMS, AppPage.ARTISTS,
-                AppPage.ALBUM_DETAIL, AppPage.ARTIST_DETAIL, AppPage.PLAYLIST_DETAIL -> goBackFromPage()
+                AppPage.ALBUM_DETAIL, AppPage.ARTIST_DETAIL, AppPage.PLAYLIST_DETAIL,
+                AppPage.QUEUE -> goBackFromPage()
                 AppPage.LIBRARY, AppPage.PLAYLISTS -> {
                     if (lastRootBackAt > 0L && now - lastRootBackAt <= 2_000L) {
                         (context as? Activity)?.finish()
@@ -1274,6 +1275,8 @@ private fun FeatherW8App(
                             )
                         } ?: EmptyCard("Playlist unavailable", "It may have been removed.")
                     }
+                    // Legacy page restored from old saved state; LaunchedEffect(Unit) moves it to LIBRARY.
+                    AppPage.QUEUE -> Unit
                 }
             }
         }
@@ -1602,7 +1605,7 @@ private fun LibraryScreen(
     Column(Modifier.fillMaxSize()) {
         if (selectionMode) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, top = 14.dp, bottom = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {

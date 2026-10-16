@@ -25,12 +25,18 @@ class MainActivity : ComponentActivity() {
     /** A file another app asked us to play ("Open with"); cleared once playback has been started. */
     private var viewIntentUri by mutableStateOf<Uri?>(null)
 
+    /** The player card in the notification shade was tapped; cleared once the full player is open. */
+    private var openPlayerRequested by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CustomArtworkStore.load(this)
         request120HzIfAvailable()
         // A recreated activity (rotation, process restart) must not replay the original intent.
-        if (savedInstanceState == null) viewIntentUri = intent.viewUri()
+        if (savedInstanceState == null) {
+            viewIntentUri = intent.viewUri()
+            openPlayerRequested = intent.isOpenPlayerRequest()
+        }
         setContent {
             val profile = remember { detectDeviceProfile() }
             val preferences = remember { getSharedPreferences("featherw8", Context.MODE_PRIVATE) }
@@ -55,7 +61,9 @@ class MainActivity : ComponentActivity() {
                         preferences.edit().putString("accent_color", id).apply()
                     },
                     openUri = viewIntentUri,
-                    onOpenUriHandled = { viewIntentUri = null }
+                    onOpenUriHandled = { viewIntentUri = null },
+                    openPlayerRequested = openPlayerRequested,
+                    onOpenPlayerHandled = { openPlayerRequested = false }
                 )
             }
         }
@@ -65,7 +73,11 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         viewIntentUri = intent.viewUri()
+        openPlayerRequested = intent.isOpenPlayerRequest()
     }
+
+    private fun Intent.isOpenPlayerRequest(): Boolean =
+        action == ACTION_OPEN_PLAYER && flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0
 
     private fun Intent.viewUri(): Uri? {
         if (action != Intent.ACTION_VIEW) return null
@@ -106,5 +118,10 @@ class MainActivity : ComponentActivity() {
         attributes.preferredRefreshRate = preferredMode?.refreshRate ?: 120f
         if (preferredMode != null) attributes.preferredDisplayModeId = preferredMode.modeId
         window.attributes = attributes
+    }
+
+    companion object {
+        /** Sent by the media session's activity: show the player, as when its card is tapped in the shade. */
+        const val ACTION_OPEN_PLAYER = "com.featherw8.player.action.OPEN_PLAYER"
     }
 }

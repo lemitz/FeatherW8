@@ -1,8 +1,10 @@
 package com.featherw8.player.audio
 
+import androidx.media3.common.util.ParsableByteArray
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -12,6 +14,14 @@ import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 
 class DsdMetadataReaderTest {
+    @Before
+    fun skipMedia3TestDetection() {
+        // ParsableByteArray probes the Android framework to find out whether it runs inside a test,
+        // which cannot work in a plain JVM unit test (Build.FINGERPRINT is null in the stub jar).
+        // Setting the flag explicitly skips that probe; on a device it is never reached either way.
+        ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(false)
+    }
+
     private val sampleRate = 2_822_400
     private val channels = 2
     private val blockSize = 4096

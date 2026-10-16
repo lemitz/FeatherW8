@@ -15,13 +15,6 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -47,14 +39,11 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,12 +57,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
@@ -111,6 +97,8 @@ import com.featherw8.player.ui.model.AlbumCollection
 import com.featherw8.player.ui.model.AppPage
 import com.featherw8.player.ui.model.ArtistCollection
 import com.featherw8.player.ui.model.buildAlbumCollections
+import com.featherw8.player.ui.model.SmartPlaylistCollections
+import com.featherw8.player.ui.model.buildSmartPlaylistCollections
 import com.featherw8.player.ui.model.buildArtistCollections
 import com.featherw8.player.ui.model.encodePlaylists
 import com.featherw8.player.ui.model.loadFavorites
@@ -120,8 +108,6 @@ import com.featherw8.player.ui.model.PlaylistDetailState
 import com.featherw8.player.ui.model.SortMode
 import com.featherw8.player.ui.model.TrackAction
 import com.featherw8.player.ui.model.UserPlaylist
-import com.featherw8.player.ui.player.FullPlayerScreen
-import com.featherw8.player.ui.player.MiniPlayerBar
 import com.featherw8.player.ui.screens.AlbumsScreen
 import com.featherw8.player.ui.screens.ArtistsScreen
 import com.featherw8.player.ui.screens.CollectionPageEntrance
@@ -131,12 +117,15 @@ import com.featherw8.player.ui.screens.SettingsScreen
 import com.featherw8.player.ui.screens.snapToStep
 import com.featherw8.player.ui.screens.TrackCollectionDetailScreen
 import com.featherw8.player.ui.theme.AmoledBlack
-import com.featherw8.player.ui.theme.CardBlack
 import com.featherw8.player.ui.theme.DeviceProfile
-import com.featherw8.player.ui.theme.FeatherRed
 import com.featherw8.player.ui.theme.MiniPlayerContentOverlap
-import com.featherw8.player.ui.theme.MutedText
 import com.featherw8.player.ui.theme.navColors
+import com.featherw8.player.ui.components.ChangeCoverDialog
+import com.featherw8.player.ui.components.DeletePlaylistDialog
+import com.featherw8.player.ui.components.DeleteTracksDialog
+import com.featherw8.player.ui.components.PlaylistActionsDialog
+import com.featherw8.player.ui.components.RenamePlaylistDialog
+import com.featherw8.player.ui.player.PlayerOverlays
 
 internal const val KNOWN_TRACK_IDS_KEY = "known_track_ids"
 
@@ -262,7 +251,10 @@ internal fun FeatherW8App(
             AppPage.PLAYLISTS -> 1
             else -> null
         }
-        if (targetPage != null && tabPagerState.settledPage != targetPage) {
+        // Compare with where the pager is heading, not with the last page it settled on: a quick tap
+        // back while it is still travelling has to be able to reverse the animation. (Comparing with
+        // settledPage dropped that tap and left the pager to drift, then fight the selected tab.)
+        if (targetPage != null && tabPagerState.targetPage != targetPage) {
             tabPagerState.animateScrollToPage(targetPage)
         }
     }
@@ -289,11 +281,15 @@ internal fun FeatherW8App(
                 withContext(Dispatchers.IO) {
                     preferences.edit().putStringSet(KNOWN_TRACK_IDS_KEY, currentIds).apply()
                 }
-                tracks = scannedTracks
-                selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
-                CoverWarmer.start(scope, context.applicationContext, scannedTracks) {
-                    libraryListState.isScrollInProgress
+                // The scan runs on every return to the app. Replacing the list with an equal one would
+                // still re-filter, re-sort and regroup the whole library and restart the cover warmer.
+                if (scannedTracks != tracks) {
+                    tracks = scannedTracks
+                    CoverWarmer.start(scope, context.applicationContext, scannedTracks) {
+                        libraryListState.isScrollInProgress
+                    }
                 }
+                selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
                 if (manualScan) {
                     val message = if (newTrackCount == 0) "No new tracks found" else {
                         val unit = if (newTrackCount == 1) "track" else "tracks"
@@ -572,6 +568,17 @@ internal fun FeatherW8App(
     val playCountReader: (String) -> Int = remember(playCountValues) {
         { id -> playCountValues[id] ?: 0 }
     }
+    // Computed here, once per change of its inputs, instead of inside the Playlists page: the page
+    // is created and torn down while switching tabs and would start empty each time.
+    var smartPlaylists by remember { mutableStateOf(SmartPlaylistCollections()) }
+    LaunchedEffect(tracks, favoriteIds, playCountValues) {
+        val trackSnapshot = tracks
+        val favoritesSnapshot = favoriteIds
+        val countsSnapshot = playCountValues
+        smartPlaylists = withContext(Dispatchers.Default) {
+            buildSmartPlaylistCollections(trackSnapshot, favoritesSnapshot) { id -> countsSnapshot[id] ?: 0 }
+        }
+    }
     val currentlyPlaying: (String) -> Boolean = remember(activeMediaId, isActuallyPlaying) {
         { id -> id == activeMediaId && isActuallyPlaying }
     }
@@ -773,6 +780,9 @@ internal fun FeatherW8App(
                 when (page) {
                     AppPage.LIBRARY, AppPage.PLAYLISTS -> HorizontalPager(
                         state = tabPagerState,
+                        // Keep the neighbouring tab composed: otherwise every switch throws one page away
+                        // and builds the other from scratch in the middle of the swipe animation.
+                        beyondViewportPageCount = 1,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         userScrollEnabled = !playerOpen && !playerClosedBySwipe && !miniPlayerDragActive && selectedLibraryTrackIds.isEmpty()
                     ) { tabIndex ->
@@ -804,11 +814,9 @@ internal fun FeatherW8App(
                                 onSelectAll = { selectAllVisibleLibraryTracks() }
                             )
                             else -> PlaylistsScreen(
-                                tracks = tracks,
+                                smartPlaylists = smartPlaylists,
                                 listState = playlistsListState,
                                 playlists = userPlaylists,
-                                favorites = favoriteIds,
-                                playCount = playCountReader,
                                 albums = albums,
                                 artists = artists,
                                 onOpenAlbums = { lastRootBackAt = 0L; page = AppPage.ALBUMS },
@@ -924,99 +932,60 @@ internal fun FeatherW8App(
             }
         }
 
-        currentTrack?.let { miniTrack ->
-            MiniPlayerBar(
-                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 80.dp),
-                track = miniTrack,
-                playing = playbackSnapshot.playing,
-                durationMs = playbackSnapshot.durationMs,
-                initialPositionMs = playbackSnapshot.positionMs,
-                controller = controller,
-                isVisible = !playerOpen,
-                onOpen = {
-                    selectedLibraryTrackIds = emptySet()
-                    miniPlayerDragActive = false
-                    playerClosedBySwipe = false
-                    lastRootBackAt = 0L
-                    playerOpen = true
-                },
-                onPlayPause = { if (playbackSnapshot.playing) controller?.pause() else controller?.play() },
-                onDismiss = { dismissMiniPlayer() },
-                onDragActiveChange = { miniPlayerDragActive = it }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = playerOpen && currentTrack != null,
-            modifier = Modifier.fillMaxSize(),
-            enter = slideInVertically(animationSpec = tween(190)) { it } + fadeIn(animationSpec = tween(120)),
-            exit = if (playerClosedBySwipe) {
-                ExitTransition.None
-            } else {
-                slideOutVertically(animationSpec = tween(190)) { it } + fadeOut(animationSpec = tween(120))
-            }
-        ) {
-            currentTrack?.let { activeTrack ->
-                FullPlayerScreen(
-                    track = activeTrack,
-                    queue = queue,
-                    currentId = playbackSnapshot.mediaId,
-                    isFavorite = activeTrack.id in favoriteIds,
-                    snapshot = playbackSnapshot,
-                    controller = controller,
-                    onClose = {
-                        playerClosedBySwipe = false
-                        playerOpen = false
-                    },
-                    onSwipeClose = {
-                        playerClosedBySwipe = true
-                        playerOpen = false
-                    },
-                    onPlayQueueTrack = { index -> playTracks(queue, index) },
-                    onClearQueue = {
-                        queue = listOf(activeTrack)
-                        controller?.clearMediaItems()
-                        playTracks(listOf(activeTrack), 0)
-                    },
-                    onArtworkClick = { artworkActionTrack = it },
-                    onTrackInfo = { infoTrack = it },
-                    onToggleFavorite = {
-                        val next = favoriteIds.toMutableSet().apply {
-                            if (activeTrack.id in this) remove(activeTrack.id) else add(activeTrack.id)
-                        }
-                        persistFavorites(next)
-                    },
-                    onTrackAction = { handleTrackAction(activeTrack, it) }
-                )
-            }
-        }
+        PlayerOverlays(
+            currentTrack = currentTrack,
+            snapshot = playbackSnapshot,
+            controller = controller,
+            queue = queue,
+            favoriteIds = favoriteIds,
+            playerOpen = playerOpen,
+            playerClosedBySwipe = playerClosedBySwipe,
+            onOpenPlayer = {
+                selectedLibraryTrackIds = emptySet()
+                miniPlayerDragActive = false
+                playerClosedBySwipe = false
+                lastRootBackAt = 0L
+                playerOpen = true
+            },
+            onPlayPause = { if (playbackSnapshot.playing) controller?.pause() else controller?.play() },
+            onDismissMiniPlayer = { dismissMiniPlayer() },
+            onMiniDragActiveChange = { miniPlayerDragActive = it },
+            onClosePlayer = {
+                playerClosedBySwipe = false
+                playerOpen = false
+            },
+            onSwipeClosePlayer = {
+                playerClosedBySwipe = true
+                playerOpen = false
+            },
+            onPlayQueueTrack = { index -> playTracks(queue, index) },
+            onClearQueue = { activeTrack ->
+                queue = listOf(activeTrack)
+                controller?.clearMediaItems()
+                playTracks(listOf(activeTrack), 0)
+            },
+            onArtworkClick = { artworkActionTrack = it },
+            onTrackInfo = { infoTrack = it },
+            onToggleFavorite = { activeTrack ->
+                val next = favoriteIds.toMutableSet().apply {
+                    if (activeTrack.id in this) remove(activeTrack.id) else add(activeTrack.id)
+                }
+                persistFavorites(next)
+            },
+            onTrackAction = { track, action -> handleTrackAction(track, action) }
+        )
     }
 
     if (showScanProgress) ScanDialog()
     artworkActionTrack?.let { track ->
-        AlertDialog(
-            onDismissRequest = { artworkActionTrack = null },
-            title = { Text("Change cover") },
-            text = {
-                Column {
-                    Text("Choose an image file to use as this track's cover.", color = MutedText)
-                    TextButton(
-                        onClick = { artworkPickerLauncher.launch(arrayOf("image/*")) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Choose image") }
-                    if (CustomArtworkStore.get(track.id) != null) {
-                        TextButton(
-                            onClick = {
-                                CustomArtworkStore.remove(context, track.id)
-                                artworkActionTrack = null
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Use original cover", color = MutedText) }
-                    }
-                }
+        ChangeCoverDialog(
+            hasCustomCover = CustomArtworkStore.get(track.id) != null,
+            onChooseImage = { artworkPickerLauncher.launch(arrayOf("image/*")) },
+            onUseOriginal = {
+                CustomArtworkStore.remove(context, track.id)
+                artworkActionTrack = null
             },
-            confirmButton = { TextButton(onClick = { artworkActionTrack = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDismiss = { artworkActionTrack = null }
         )
     }
     infoTrack?.let { track ->
@@ -1071,114 +1040,64 @@ internal fun FeatherW8App(
         )
     }
     playlistForActions?.let { playlist ->
-        AlertDialog(
-            onDismissRequest = { playlistForActions = null },
-            title = { Text(playlist.name) },
-            text = {
-                Column {
-                    TextButton(
-                        onClick = {
-                            renamePlaylistName = playlist.name
-                            playlistForRename = playlist
-                            playlistForActions = null
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Rename playlist") }
-                    TextButton(
-                        onClick = {
-                            playlistForDelete = playlist
-                            playlistForActions = null
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Delete playlist", color = FeatherRed) }
-                }
+        PlaylistActionsDialog(
+            playlist = playlist,
+            onRename = {
+                renamePlaylistName = playlist.name
+                playlistForRename = playlist
+                playlistForActions = null
             },
-            confirmButton = { TextButton(onClick = { playlistForActions = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDelete = {
+                playlistForDelete = playlist
+                playlistForActions = null
+            },
+            onDismiss = { playlistForActions = null }
         )
     }
     playlistForRename?.let { playlist ->
-        AlertDialog(
-            onDismissRequest = { playlistForRename = null },
-            title = { Text("Rename playlist") },
-            text = {
-                OutlinedTextField(
-                    value = renamePlaylistName,
-                    onValueChange = { renamePlaylistName = it },
-                    label = { Text("Playlist name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+        RenamePlaylistDialog(
+            name = renamePlaylistName,
+            onNameChange = { renamePlaylistName = it },
+            onSave = {
+                val cleanName = renamePlaylistName.trim()
+                persistPlaylists(userPlaylists.map { if (it.id == playlist.id) it.copy(name = cleanName) else it })
+                playlistForRename = null
             },
-            confirmButton = {
-                TextButton(
-                    enabled = renamePlaylistName.trim().isNotEmpty(),
-                    onClick = {
-                        val cleanName = renamePlaylistName.trim()
-                        persistPlaylists(userPlaylists.map {
-                            if (it.id == playlist.id) it.copy(name = cleanName) else it
-                        })
-                        playlistForRename = null
-                    }
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { playlistForRename = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDismiss = { playlistForRename = null }
         )
     }
     playlistForDelete?.let { playlist ->
-        AlertDialog(
-            onDismissRequest = { playlistForDelete = null },
-            title = { Text("Delete playlist?") },
-            text = { Text("Delete “${playlist.name}”? Its tracks will remain in your library.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    persistPlaylists(userPlaylists.filterNot { it.id == playlist.id })
-                    playlistForDelete = null
-                }) { Text("Delete", color = FeatherRed) }
+        DeletePlaylistDialog(
+            playlist = playlist,
+            onConfirm = {
+                persistPlaylists(userPlaylists.filterNot { it.id == playlist.id })
+                playlistForDelete = null
             },
-            dismissButton = { TextButton(onClick = { playlistForDelete = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDismiss = { playlistForDelete = null }
         )
     }
 
     deleteTrack?.let { track ->
-        AlertDialog(
-            onDismissRequest = { deleteTrack = null },
-            title = { Text("Delete file?") },
-            text = { Text(track.title, fontFamily = FontFamily.SansSerif) },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleteTrack = null
-                    deleteFromMediaStore(context, listOf(track), deleteLauncher) { requestOrScan() }
-                }) { Text("Delete file", color = FeatherRed) }
+        DeleteTracksDialog(
+            tracks = listOf(track),
+            onConfirm = {
+                deleteTrack = null
+                deleteFromMediaStore(context, listOf(track), deleteLauncher) { requestOrScan() }
             },
-            dismissButton = { TextButton(onClick = { deleteTrack = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDismiss = { deleteTrack = null }
         )
     }
     tracksPendingDelete?.let { selectedTracks ->
-        AlertDialog(
-            onDismissRequest = { tracksPendingDelete = null },
-            title = { Text(if (selectedTracks.size == 1) "Delete file?" else "Delete files?") },
-            text = {
-                Text(
-                    if (selectedTracks.size == 1) selectedTracks.first().title
-                    else "Delete ${selectedTracks.size} selected audio files? This can't be undone.",
-                    fontFamily = FontFamily.SansSerif
-                )
+        DeleteTracksDialog(
+            tracks = selectedTracks,
+            onConfirm = {
+                tracksPendingDelete = null
+                deleteFromMediaStore(context, selectedTracks, deleteLauncher) {
+                    selectedLibraryTrackIds = emptySet()
+                    requestOrScan()
+                }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    tracksPendingDelete = null
-                    deleteFromMediaStore(context, selectedTracks, deleteLauncher) {
-                        selectedLibraryTrackIds = emptySet()
-                        requestOrScan()
-                    }
-                }) { Text(if (selectedTracks.size == 1) "Delete file" else "Delete files", color = FeatherRed) }
-            },
-            dismissButton = { TextButton(onClick = { tracksPendingDelete = null }) { Text("Cancel") } },
-            containerColor = CardBlack
+            onDismiss = { tracksPendingDelete = null }
         )
     }
 }

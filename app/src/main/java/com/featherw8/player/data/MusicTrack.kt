@@ -26,7 +26,13 @@ data class MusicTrack(
     val dateAddedSeconds: Long,
     val albumId: Long,
     val mimeType: String,
-    val relativePath: String = ""
+    val relativePath: String = "",
+    /** A cover that was extracted from the file itself (DSD tags); wins over the media index. */
+    val coverUri: Uri? = null,
+    /** Exact bit rate when the file format states it (DSD); 0 when it has to be measured. */
+    val bitrateBps: Long = 0L,
+    /** Extra format details shown next to [formatLabel], e.g. "DSD128 · stereo". */
+    val formatDetail: String = ""
 ) {
     val extension: String by lazy { displayName.substringAfterLast('.', "").lowercase() }
 
@@ -38,7 +44,9 @@ data class MusicTrack(
     }
 
     val artworkUri: Uri? by lazy {
-        if (albumId < 0L) {
+        if (coverUri != null) {
+            coverUri
+        } else if (albumId < 0L) {
             null
         } else {
             val volume = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

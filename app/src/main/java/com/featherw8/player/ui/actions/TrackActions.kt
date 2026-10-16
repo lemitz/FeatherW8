@@ -21,7 +21,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import com.featherw8.player.audio.DsdDuration
+import com.featherw8.player.audio.DsdLibrary
+import com.featherw8.player.audio.withDsdInfo
 import com.featherw8.player.data.MusicTrack
 import kotlinx.coroutines.launch
 import com.featherw8.player.ui.artwork.CustomArtworkStore
@@ -79,7 +80,7 @@ internal fun resolveExternalTrack(context: Context, uri: Uri, library: List<Musi
         mimeType = context.contentResolver.getType(uri).orEmpty()
     )
     if (track.isDsd) {
-        track = track.copy(durationMs = DsdDuration.readDurationMs(context.contentResolver, uri, track.sizeBytes))
+        track = track.withDsdInfo(DsdLibrary.info(context, uri, "ext:$uri:${track.sizeBytes}"))
     }
     track.precompute()
     return track

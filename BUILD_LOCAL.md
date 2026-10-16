@@ -43,6 +43,20 @@ app/build/outputs/apk/debug/app-debug.apk
 
 The debug APK is automatically signed with the standard Android debug key. The app targets `arm64-v8a`; it does not need an external keystore for a local debug install.
 
+### Release build
+
+`./gradlew :app:assembleRelease` builds the optimised variant (R8 and resource shrinking, no debug overhead) at `app/build/outputs/apk/release/app-release.apk`. This is the build that is published, and it is noticeably faster than the debug one, so use it when judging performance.
+
+Without any configuration it is signed with the standard debug key. To sign it with your own key, point these environment variables at a keystore (the key password must equal the store password, as in a PKCS12 keystore):
+
+```text
+FEATHERW8_KEYSTORE=<path to .jks>
+FEATHERW8_KEYSTORE_PASSWORD=<password>
+FEATHERW8_KEY_ALIAS=<alias>
+```
+
+The project's own key is not in the repository; GitHub Actions restores it from repository secrets. An APK can only be installed over one signed with the same key.
+
 ## Versions pinned by the project
 
 - Gradle Wrapper: `9.4.1`

@@ -43,7 +43,7 @@ internal fun TrackArtwork(track: MusicTrack, modifier: Modifier, shape: RoundedC
     val context = LocalContext.current
     val targetPixels = if (large) 720 else CoverDiskCache.THUMB_PIXELS
     val customArtworkUri = CustomArtworkStore.get(track.id)
-    val defaultArtworkUri = remember(track.albumId) { track.artworkUri }
+    val defaultArtworkUri = remember(track.id, track.albumId, track.coverUri) { track.artworkUri }
     val artworkUri = customArtworkUri ?: defaultArtworkUri
     val cacheKey = artworkUri?.let { "$it@$targetPixels" }
     var bitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(null) }

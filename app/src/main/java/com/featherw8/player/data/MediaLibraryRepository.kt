@@ -6,7 +6,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import com.featherw8.player.audio.DsdDuration
+import com.featherw8.player.audio.DsdLibrary
+import com.featherw8.player.audio.withDsdInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -15,7 +16,8 @@ import kotlinx.coroutines.withContext
  * It never enumerates removable volumes and never offers a source picker.
  */
 class MediaLibraryRepository(context: Context) {
-    private val resolver: ContentResolver = context.applicationContext.contentResolver
+    private val appContext: Context = context.applicationContext
+    private val resolver: ContentResolver = appContext.contentResolver
 
     suspend fun scanInternalStorage(): List<MusicTrack> = withContext(Dispatchers.IO) {
         val rows = LinkedHashMap<String, MusicTrack>()
@@ -126,8 +128,7 @@ class MediaLibraryRepository(context: Context) {
                     title = title,
                     artist = "Unknown Artist",
                     album = "Unknown Album",
-                    // MediaStore has no duration for DSD, so read it from the file header.
-                    durationMs = DsdDuration.readDurationMs(resolver, uri, sizeBytes),
+                    durationMs = 0L, // filled in from the file itself below
                     sizeBytes = sizeBytes,
                     dateAddedSeconds = cursor.getLong(addedCol),
                     albumId = -1L,
@@ -137,7 +138,17 @@ class MediaLibraryRepository(context: Context) {
             }
         }
 
-        val tracks = rows.values.sortedByDescending { it.dateAddedSeconds }
+        // MediaStore knows nothing about DSD tags: it reports the folder as the album, no artist and no
+        // duration. Take title, artist, album, duration and cover from the file itself instead.
+        val tracks = rows.values
+            .map { track ->
+                if (track.isDsd) {
+                    track.withDsdInfo(DsdLibrary.info(appContext, track.uri, "${track.id}:${track.sizeBytes}"))
+                } else {
+                    track
+                }
+            }
+            .sortedByDescending { it.dateAddedSeconds }
         // Derive every label the UI needs while we are still off the main thread.
         tracks.forEach { it.precompute() }
         tracks

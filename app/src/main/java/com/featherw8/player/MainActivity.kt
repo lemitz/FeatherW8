@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.ClipData
 import android.content.ComponentName
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -20,6 +21,7 @@ import android.os.SystemClock
 import android.util.Size
 import android.util.LruCache
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -178,6 +180,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.featherw8.player.audio.DsdDuration
 import com.featherw8.player.data.MediaLibraryRepository
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.data.PlayCountStore
@@ -402,10 +405,15 @@ private data class PlaybackSnapshot(
 class MainActivity : ComponentActivity() {
     var onAppEntry: (() -> Unit)? = null
 
+    /** A file another app asked us to play ("Open with"); cleared once playback has been started. */
+    private var viewIntentUri by mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CustomArtworkStore.load(this)
         request120HzIfAvailable()
+        // A recreated activity (rotation, process restart) must not replay the original intent.
+        if (savedInstanceState == null) viewIntentUri = intent.viewUri()
         setContent {
             val profile = remember { detectDeviceProfile() }
             val preferences = remember { getSharedPreferences("featherw8", Context.MODE_PRIVATE) }
@@ -428,10 +436,27 @@ class MainActivity : ComponentActivity() {
                     onAccentChange = { id ->
                         accentId = id
                         preferences.edit().putString("accent_color", id).apply()
-                    }
+                    },
+                    openUri = viewIntentUri,
+                    onOpenUriHandled = { viewIntentUri = null }
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        viewIntentUri = intent.viewUri()
+    }
+
+    private fun Intent.viewUri(): Uri? {
+        if (action != Intent.ACTION_VIEW) return null
+        if (flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
+        val uri = data ?: return null
+        // Keep access across a restart of the playback service where the sender allows it.
+        runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        return uri
     }
 
     override fun onStart() {
@@ -533,7 +558,9 @@ private fun FeatherW8App(
     dotFontEnabled: Boolean,
     onDotFontChange: (Boolean) -> Unit,
     accentId: String,
-    onAccentChange: (String) -> Unit
+    onAccentChange: (String) -> Unit,
+    openUri: Uri?,
+    onOpenUriHandled: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -831,6 +858,16 @@ private fun FeatherW8App(
         }
     }
 
+    // "Open with FeatherW8": play the requested file once the player service is connected.
+    LaunchedEffect(openUri, controller) {
+        val uri = openUri ?: return@LaunchedEffect
+        if (controller == null) return@LaunchedEffect
+        val library = tracks
+        val track = withContext(Dispatchers.IO) { resolveExternalTrack(context, uri, library) }
+        playTracks(listOf(track), 0)
+        onOpenUriHandled()
+    }
+
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { PlayCountStore.getAll(context, emptyList()) }
         if (permissionGranted) scanLibrary(showProgress = false)
@@ -954,8 +991,9 @@ private fun FeatherW8App(
         visibleTracks = withContext(Dispatchers.Default) {
             val filtered = trackSnapshot.filter { track ->
                 track.sizeBytes >= minimumSizeBytes &&
-                    (minDurationSeconds <= 0f ||
-                        (track.durationMs > 0L && track.durationMs / 1_000L >= minimumWholeSeconds)) &&
+                    // A track whose duration is unknown (0) is never hidden by this filter.
+                    (minDurationSeconds <= 0f || track.durationMs <= 0L ||
+                        track.durationMs / 1_000L >= minimumWholeSeconds) &&
                     (normalizedQuery.isBlank() ||
                         track.title.contains(normalizedQuery, ignoreCase = true) ||
                         track.artist.contains(normalizedQuery, ignoreCase = true) ||
@@ -3200,6 +3238,59 @@ private fun navColors() = androidx.compose.material3.NavigationBarItemDefaults.c
     unselectedIconColor = MutedText,
     unselectedTextColor = MutedText
 )
+
+/**
+ * Maps a file opened from another app to a track. A file that is already in the library keeps its
+ * library identity (play counts, cover); anything else becomes a standalone track.
+ */
+private fun resolveExternalTrack(context: Context, uri: Uri, library: List<MusicTrack>): MusicTrack {
+    library.firstOrNull { it.uri == uri }?.let { return it }
+    if (uri.authority == MediaStore.AUTHORITY) {
+        runCatching { ContentUris.parseId(uri).toString() }.getOrNull()
+            ?.let { id -> library.firstOrNull { it.id == id } }
+            ?.let { return it }
+    }
+
+    var displayName: String? = null
+    var sizeBytes = 0L
+    runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameColumn >= 0) displayName = cursor.getString(nameColumn)
+                val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) sizeBytes = cursor.getLong(sizeColumn)
+            }
+        }
+    }
+    val name = displayName?.takeIf { it.isNotBlank() }
+        ?: uri.lastPathSegment?.substringAfterLast('/')
+        ?: "Audio"
+    var track = MusicTrack(
+        id = "ext:$uri",
+        uri = uri,
+        displayName = name,
+        title = name.substringBeforeLast('.', name).replace('_', ' '),
+        artist = "Unknown Artist",
+        album = "Unknown Album",
+        durationMs = 0L,
+        sizeBytes = sizeBytes.coerceAtLeast(0L),
+        dateAddedSeconds = System.currentTimeMillis() / 1_000L,
+        albumId = -1L,
+        mimeType = context.contentResolver.getType(uri).orEmpty()
+    )
+    if (track.isDsd) {
+        track = track.copy(durationMs = DsdDuration.readDurationMs(context.contentResolver, uri, track.sizeBytes))
+    }
+    track.precompute()
+    return track
+}
 
 private fun MusicTrack.toMediaItem(): MediaItem = MediaItem.Builder()
     .setMediaId(id)

@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import com.featherw8.player.audio.DsdDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -116,15 +117,18 @@ class MediaLibraryRepository(context: Context) {
                 if (key in rows) continue
                 val displayName = cursor.getString(nameCol).orEmpty().ifBlank { "DSD audio $id" }
                 val title = displayName.substringBeforeLast('.', displayName).replace('_', ' ')
+                val uri = ContentUris.withAppendedId(filesCollection, id)
+                val sizeBytes = cursor.getLong(sizeCol).coerceAtLeast(0L)
                 rows[key] = MusicTrack(
                     id = key,
-                    uri = ContentUris.withAppendedId(filesCollection, id),
+                    uri = uri,
                     displayName = displayName,
                     title = title,
                     artist = "Unknown Artist",
                     album = "Unknown Album",
-                    durationMs = 0L,
-                    sizeBytes = cursor.getLong(sizeCol).coerceAtLeast(0L),
+                    // MediaStore has no duration for DSD, so read it from the file header.
+                    durationMs = DsdDuration.readDurationMs(resolver, uri, sizeBytes),
+                    sizeBytes = sizeBytes,
                     dateAddedSeconds = cursor.getLong(addedCol),
                     albumId = -1L,
                     mimeType = cursor.getString(mimeCol).orEmpty().ifBlank { "audio/x-dsd" },

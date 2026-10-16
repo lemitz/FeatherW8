@@ -18,10 +18,48 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- "Open with": any audio file, including DSF/DFF when the file manager reports an audio MIME type. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+            </intent-filter>
+
+            <!--
+                DSD files often arrive with a generic MIME type (application/octet-stream), so they are also
+                matched by extension. Android's pathPattern needs one pattern per number of dots in the path.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.dsf" />
+                <data android:pathPattern=".*\\..*\\.dsf" />
+                <data android:pathPattern=".*\\..*\\..*\\.dsf" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.dsf" />
+                <data android:pathPattern=".*\\.dff" />
+                <data android:pathPattern=".*\\..*\\.dff" />
+                <data android:pathPattern=".*\\..*\\..*\\.dff" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.dff" />
+                <data android:pathPattern=".*\\.dsd" />
+                <data android:pathPattern=".*\\..*\\.dsd" />
+                <data android:pathPattern=".*\\..*\\..*\\.dsd" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.dsd" />
             </intent-filter>
         </activity>
 

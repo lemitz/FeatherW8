@@ -1,6 +1,8 @@
 package com.featherw8.player.playback
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.AudioAttributes
@@ -11,6 +13,7 @@ import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.featherw8.player.MainActivity
 import com.featherw8.player.audio.DsdExtractor
 import com.featherw8.player.data.ActualPlayCounter
 import com.featherw8.player.data.PlayCountStore
@@ -78,7 +81,15 @@ class PlaybackService : MediaSessionService() {
                 preferences.edit().putBoolean(PREF_SHUFFLE_ENABLED, shuffleModeEnabled).apply()
             }
         })
-        mediaSession = MediaSession.Builder(this, player).build()
+        // What a tap on the player card in the notification shade (or on the lock screen) opens.
+        // Without it some systems, Nothing OS among them, do nothing when the card is tapped.
+        val openPlayer = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN_PLAYER),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        mediaSession = MediaSession.Builder(this, player).setSessionActivity(openPlayer).build()
         handler.post(countMonitor)
     }
 

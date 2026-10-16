@@ -64,11 +64,17 @@ internal fun TrackRow(
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
-    onToggleSelection: () -> Unit = {}
+    onToggleSelection: () -> Unit = {},
+    /** Marks the row as the one the player is on (tinted background), independent of [playing]. */
+    highlighted: Boolean = false,
+    /** Whether to show the play counter; lists that have no counts to show hide it. */
+    showPlays: Boolean = true
 ) {
     var menuExpanded by remember(track.id) { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).combinedClickable(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
+            .background(if (highlighted) FeatherRed.copy(alpha = .12f) else Color.Transparent)
+            .combinedClickable(
             onClick = { if (selectionMode) onToggleSelection() else onPlay() },
             onLongClick = onLongClick
         ).padding(horizontal = 5.dp, vertical = 6.dp),
@@ -99,7 +105,9 @@ internal fun TrackRow(
         if (selectionMode) {
             SelectionCheckBox(checked = selected, modifier = Modifier.padding(horizontal = 5.dp))
         } else {
-            Text("${plays}×", color = FeatherRed.copy(alpha = .8f), fontSize = 9.sp, modifier = Modifier.padding(horizontal = 2.dp))
+            if (showPlays) {
+                Text("${plays}×", color = FeatherRed.copy(alpha = .8f), fontSize = 9.sp, modifier = Modifier.padding(horizontal = 2.dp))
+            }
             Box {
                 IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Track options", tint = MutedText, modifier = Modifier.size(18.dp))

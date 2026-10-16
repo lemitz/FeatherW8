@@ -154,7 +154,9 @@ internal fun FeatherW8App(
     accentId: String,
     onAccentChange: (String) -> Unit,
     openUri: Uri?,
-    onOpenUriHandled: () -> Unit
+    onOpenUriHandled: () -> Unit,
+    openPlayerRequested: Boolean,
+    onOpenPlayerHandled: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -551,6 +553,24 @@ internal fun FeatherW8App(
 
     val currentTrack = queue.firstOrNull { it.id == playbackSnapshot.mediaId }
         ?: tracks.firstOrNull { it.id == playbackSnapshot.mediaId }
+
+    // A tap on the player card in the notification shade: show the full player once the track it is
+    // about is known. After a cold start that is only after the library scan, so the request waits;
+    // if nothing is playing there is nothing to show and the request is dropped.
+    LaunchedEffect(openPlayerRequested, currentTrack, controller, playbackSnapshot.mediaId) {
+        if (!openPlayerRequested) return@LaunchedEffect
+        when {
+            currentTrack != null -> {
+                selectedLibraryTrackIds = emptySet()
+                miniPlayerDragActive = false
+                playerClosedBySwipe = false
+                lastRootBackAt = 0L
+                playerOpen = true
+                onOpenPlayerHandled()
+            }
+            controller != null && playbackSnapshot.mediaId == null -> onOpenPlayerHandled()
+        }
+    }
     // While the now playing screen covers everything, keep the content padding and the
     // "currently playing" marker frozen. Starting playback fires several player events
     // (media item, buffering, playing, timeline), and each of them would otherwise

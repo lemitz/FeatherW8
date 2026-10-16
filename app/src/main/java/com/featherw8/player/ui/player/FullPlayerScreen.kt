@@ -399,7 +399,6 @@ internal fun FullPlayerScreen(
             QueueScreen(
                 queue = queue,
                 currentId = currentId,
-                playing = snapshot.playing,
                 onPlay = onPlayQueueTrack,
                 onOpenPlayer = { scope.launch { playerPagerState.animateScrollToPage(PlayerNowPlayingPage) } },
                 onClear = onClearQueue,

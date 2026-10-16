@@ -11,12 +11,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,17 +33,42 @@ import com.featherw8.player.ui.components.TrackRow
 import com.featherw8.player.ui.theme.AmoledBlack
 import com.featherw8.player.ui.theme.MutedText
 
+/** The "Playback queue" header is the first list item; the tracks follow it. */
+private const val QUEUE_HEADER_ITEMS = 1
+
+/** How many tracks before the current one stay visible above it, so it is not glued to the top edge. */
+private const val QUEUE_CONTEXT_ROWS = 2
+
 @Composable
 internal fun QueueScreen(
     queue: List<MusicTrack>,
     currentId: String?,
-    playing: Boolean,
     onPlay: (Int) -> Unit,
     onOpenPlayer: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val currentIndex = queue.indexOfFirst { it.id == currentId }
+    // The page is created each time the queue is opened, so starting the list at the current track
+    // here means it appears already there, instead of at the top and then jumping.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = if (currentIndex < 0) 0 else {
+            (currentIndex + QUEUE_HEADER_ITEMS - QUEUE_CONTEXT_ROWS).coerceAtLeast(0)
+        }
+    )
+    // While the queue stays open the player moves on to the next track: follow it, but only when it
+    // has left the screen, so a track you are looking at does not get scrolled under your finger.
+    LaunchedEffect(currentId) {
+        if (currentIndex < 0) return@LaunchedEffect
+        val visible = listState.layoutInfo.visibleItemsInfo
+        if (visible.isEmpty()) return@LaunchedEffect // not measured yet: the initial index covers this
+        val target = currentIndex + QUEUE_HEADER_ITEMS
+        if (visible.none { it.index == target }) {
+            listState.animateScrollToItem((target - QUEUE_CONTEXT_ROWS).coerceAtLeast(0))
+        }
+    }
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize().background(AmoledBlack),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -60,10 +87,14 @@ internal fun QueueScreen(
         }
         if (queue.isEmpty()) item { EmptyCard("Queue is empty", "Play a track from Library to start a queue.") }
         items(queue, key = { it.id }, contentType = { "track" }) { track ->
+            // The current track stays marked while paused too: this is "where am I in the queue".
+            val isCurrent = track.id == currentId
             TrackRow(
                 track = track,
                 plays = 0,
-                playing = track.id == currentId && playing,
+                playing = isCurrent,
+                highlighted = isCurrent,
+                showPlays = false, // the queue has no counts to show; a constant "0x" on every row was wrong
                 onPlay = { onPlay(queue.indexOf(track)) },
                 onAction = {}
             )

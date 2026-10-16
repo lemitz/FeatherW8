@@ -58,20 +58,25 @@ internal object DsdMetadataReader {
         ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream -> parse(stream.channel) }
     }.getOrNull()
 
-    /** Throws when the file is not a supported DSD container. */
-    fun parse(channel: SeekableByteChannel): DsdMetadata {
+    /**
+     * Throws when the file is not a supported DSD container. A damaged or unsupported tag never fails
+     * the whole read (the stream parameters are still valid) unless [strictTags] is set, which the
+     * tests use so that a tag problem is reported instead of silently producing no tags.
+     */
+    fun parse(channel: SeekableByteChannel, strictTags: Boolean = false): DsdMetadata {
         val fileSize = channel.size()
         channel.position(0L)
         val reader = DataReader { buffer, offset, length ->
             if (length == 0) 0 else channel.read(ByteBuffer.wrap(buffer, offset, length))
         }
         val info = DsdFileInfo.parse(DefaultExtractorInput(reader, 0L, fileSize))
-        val tags = runCatching {
+        val readTags = {
             when (info.container) {
                 Container.DSF -> readDsfTags(channel, fileSize)
                 Container.DSDIFF -> readDsdiffTags(channel, fileSize)
             }
-        }.getOrDefault(Tags())
+        }
+        val tags = if (strictTags) readTags() else runCatching(readTags).getOrDefault(Tags())
         return DsdMetadata(
             channels = info.channels,
             sampleRate = info.sampleRate,

@@ -86,7 +86,7 @@ class DsdMetadataReaderTest {
         try {
             file.writeBytes(bytes)
             return Files.newByteChannel(file.toPath(), StandardOpenOption.READ).use { channel ->
-                DsdMetadataReader.parse(channel)
+                DsdMetadataReader.parse(channel, strictTags = true)
             }
         } finally {
             file.delete()

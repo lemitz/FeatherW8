@@ -111,6 +111,8 @@ import com.featherw8.player.ui.model.AlbumCollection
 import com.featherw8.player.ui.model.AppPage
 import com.featherw8.player.ui.model.ArtistCollection
 import com.featherw8.player.ui.model.buildAlbumCollections
+import com.featherw8.player.ui.model.SmartPlaylistCollections
+import com.featherw8.player.ui.model.buildSmartPlaylistCollections
 import com.featherw8.player.ui.model.buildArtistCollections
 import com.featherw8.player.ui.model.encodePlaylists
 import com.featherw8.player.ui.model.loadFavorites
@@ -262,7 +264,10 @@ internal fun FeatherW8App(
             AppPage.PLAYLISTS -> 1
             else -> null
         }
-        if (targetPage != null && tabPagerState.settledPage != targetPage) {
+        // Compare with where the pager is heading, not with the last page it settled on: a quick tap
+        // back while it is still travelling has to be able to reverse the animation. (Comparing with
+        // settledPage dropped that tap and left the pager to drift, then fight the selected tab.)
+        if (targetPage != null && tabPagerState.targetPage != targetPage) {
             tabPagerState.animateScrollToPage(targetPage)
         }
     }
@@ -289,11 +294,15 @@ internal fun FeatherW8App(
                 withContext(Dispatchers.IO) {
                     preferences.edit().putStringSet(KNOWN_TRACK_IDS_KEY, currentIds).apply()
                 }
-                tracks = scannedTracks
-                selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
-                CoverWarmer.start(scope, context.applicationContext, scannedTracks) {
-                    libraryListState.isScrollInProgress
+                // The scan runs on every return to the app. Replacing the list with an equal one would
+                // still re-filter, re-sort and regroup the whole library and restart the cover warmer.
+                if (scannedTracks != tracks) {
+                    tracks = scannedTracks
+                    CoverWarmer.start(scope, context.applicationContext, scannedTracks) {
+                        libraryListState.isScrollInProgress
+                    }
                 }
+                selectedLibraryTrackIds = selectedLibraryTrackIds.intersect(currentIds)
                 if (manualScan) {
                     val message = if (newTrackCount == 0) "No new tracks found" else {
                         val unit = if (newTrackCount == 1) "track" else "tracks"
@@ -572,6 +581,17 @@ internal fun FeatherW8App(
     val playCountReader: (String) -> Int = remember(playCountValues) {
         { id -> playCountValues[id] ?: 0 }
     }
+    // Computed here, once per change of its inputs, instead of inside the Playlists page: the page
+    // is created and torn down while switching tabs and would start empty each time.
+    var smartPlaylists by remember { mutableStateOf(SmartPlaylistCollections()) }
+    LaunchedEffect(tracks, favoriteIds, playCountValues) {
+        val trackSnapshot = tracks
+        val favoritesSnapshot = favoriteIds
+        val countsSnapshot = playCountValues
+        smartPlaylists = withContext(Dispatchers.Default) {
+            buildSmartPlaylistCollections(trackSnapshot, favoritesSnapshot) { id -> countsSnapshot[id] ?: 0 }
+        }
+    }
     val currentlyPlaying: (String) -> Boolean = remember(activeMediaId, isActuallyPlaying) {
         { id -> id == activeMediaId && isActuallyPlaying }
     }
@@ -773,6 +793,9 @@ internal fun FeatherW8App(
                 when (page) {
                     AppPage.LIBRARY, AppPage.PLAYLISTS -> HorizontalPager(
                         state = tabPagerState,
+                        // Keep the neighbouring tab composed: otherwise every switch throws one page away
+                        // and builds the other from scratch in the middle of the swipe animation.
+                        beyondViewportPageCount = 1,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         userScrollEnabled = !playerOpen && !playerClosedBySwipe && !miniPlayerDragActive && selectedLibraryTrackIds.isEmpty()
                     ) { tabIndex ->
@@ -804,11 +827,9 @@ internal fun FeatherW8App(
                                 onSelectAll = { selectAllVisibleLibraryTracks() }
                             )
                             else -> PlaylistsScreen(
-                                tracks = tracks,
+                                smartPlaylists = smartPlaylists,
                                 listState = playlistsListState,
                                 playlists = userPlaylists,
-                                favorites = favoriteIds,
-                                playCount = playCountReader,
                                 albums = albums,
                                 artists = artists,
                                 onOpenAlbums = { lastRootBackAt = 0L; page = AppPage.ALBUMS },

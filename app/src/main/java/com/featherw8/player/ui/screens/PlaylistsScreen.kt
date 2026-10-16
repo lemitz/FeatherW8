@@ -69,11 +69,9 @@ import com.featherw8.player.ui.theme.MutedText
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun PlaylistsScreen(
-    tracks: List<MusicTrack>,
+    smartPlaylists: SmartPlaylistCollections,
     listState: LazyListState,
     playlists: List<UserPlaylist>,
-    favorites: Set<String>,
-    playCount: (String) -> Int,
     albums: List<AlbumCollection>,
     artists: List<ArtistCollection>,
     onOpenAlbums: () -> Unit,
@@ -84,15 +82,6 @@ internal fun PlaylistsScreen(
     onOpenUserPlaylist: (UserPlaylist) -> Unit,
     bottomOverlayPadding: Dp = 0.dp
 ) {
-    var smartPlaylists by remember { mutableStateOf(SmartPlaylistCollections()) }
-    LaunchedEffect(tracks, favorites, playCount) {
-        val trackSnapshot = tracks
-        val favoritesSnapshot = favorites
-        val playCountSnapshot = playCount
-        smartPlaylists = withContext(Dispatchers.Default) {
-            buildSmartPlaylistCollections(trackSnapshot, favoritesSnapshot, playCountSnapshot)
-        }
-    }
     val recent = smartPlaylists.recent
     val highResolution = smartPlaylists.highResolution
     val mostPlayed = smartPlaylists.mostPlayed

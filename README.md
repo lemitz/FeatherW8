@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/lemitz/FeatherW8/releases"><img src="https://img.shields.io/badge/version-1.2.0-8b8cff" alt="Version 1.2.0"></a>
+  <a href="https://github.com/lemitz/FeatherW8/releases"><img src="https://img.shields.io/badge/version-1.3.1-8b8cff" alt="Version 1.3.1"></a>
   <img src="https://img.shields.io/badge/platform-Android%209%2B%20%7C%20arm64--v8a-3ddc84" alt="Android 9+ / arm64-v8a">
   <img src="https://img.shields.io/badge/built%20with-Kotlin%20%7C%20Compose-7f52ff" alt="Kotlin / Jetpack Compose">
   <img src="https://img.shields.io/badge/DSD-DSF%20%7C%20DSDIFF-e8590c" alt="DSD: DSF / DSDIFF">

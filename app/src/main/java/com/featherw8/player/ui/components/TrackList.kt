@@ -148,7 +148,11 @@ internal fun TrackRow(
     }
 }
 
-/** An accent-coloured circle with a cross: takes the track out of the list it is in. */
+/**
+ * A quiet circle with a cross: takes the track out of the list it is in. Deliberately neutral. A solid
+ * accent-coloured button on every row shouted over the list, and the accent belongs to the track that is
+ * playing; a faint disc with a muted cross is there when you look for it and out of the way otherwise.
+ */
 @Composable
 internal fun RemoveFromListButton(onClick: () -> Unit) {
     Box(
@@ -156,10 +160,10 @@ internal fun RemoveFromListButton(onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Box(
-            modifier = Modifier.size(24.dp).clip(CircleShape).background(FeatherRed),
+            modifier = Modifier.size(24.dp).clip(CircleShape).background(Color.White.copy(alpha = .09f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Close, contentDescription = "Remove from list", tint = Color.White, modifier = Modifier.size(15.dp))
+            Icon(Icons.Filled.Close, contentDescription = "Remove from list", tint = MutedText, modifier = Modifier.size(14.dp))
         }
     }
 }

@@ -64,11 +64,11 @@ Android has no DSD decoder, so FeatherW8 brings its own: a custom Media3 extract
 
 **Playlists**
 - Smart playlists: *Recently added*, *Hi-Res*, *Most played* and *Favorites*
-- Your own playlists: create, rename and delete with a long-press; deleting a playlist never deletes the audio files. Reorder the tracks or remove them from the ⋮ menu of a track
+- Your own playlists: create, rename and delete with a long-press; deleting a playlist never deletes the audio files. Hold a track and drag it to reorder, or tap the cross to take it out
 - Opening a playlist shows its tracks first — playback starts only when you pick a track or *Play all*
 
 **Player**
-- Mini player and full player, a queue that opens at the track that is playing and can be reordered or trimmed from the ⋮ menu, favorites, repeat off / all / one and shuffle; the repeat and shuffle choices survive a restart of the playback service
+- Mini player and full player, a queue that opens at the track that is playing and can be reordered by dragging and trimmed with the cross on each track, favorites, repeat off / all / one and shuffle; the repeat and shuffle choices survive a restart of the playback service
 - File info on the full player: format, size and bitrate; tap the cover to pick your own artwork from storage
 - Honest play counts: a track counts as played only after more than 90 % of it was actually heard — seeking never adds listened time
 - Pauses by itself when the headphones are unplugged, so music does not continue through the speaker

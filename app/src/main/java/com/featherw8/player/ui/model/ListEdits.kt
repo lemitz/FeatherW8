@@ -10,17 +10,10 @@ internal fun <T> List<T>.moved(from: Int, to: Int): List<T> {
 }
 
 /**
- * A copy of the ids with [first] and [second] exchanging places. Playlist edits go by id because the
- * list on screen leaves out tracks whose file is gone: two neighbours on screen need not be neighbours in
- * the stored playlist, but exchanging them keeps every other track where it is and puts the two in the
- * order that was asked for. Unchanged when either id is missing.
+ * A copy of the ids with [id] moved to the place [targetId] has. Playlist edits go by id because the list
+ * on screen leaves out tracks whose file is gone: a position on screen is not a position in the stored
+ * playlist. Moving over the id the user dragged past keeps every other track where it is. Unchanged when
+ * either id is missing.
  */
-internal fun List<String>.swapped(first: String, second: String): List<String> {
-    val a = indexOf(first)
-    val b = indexOf(second)
-    if (a < 0 || b < 0 || a == b) return this
-    return toMutableList().apply {
-        this[a] = second
-        this[b] = first
-    }
-}
+internal fun List<String>.movedOver(id: String, targetId: String): List<String> =
+    moved(indexOf(id), indexOf(targetId))

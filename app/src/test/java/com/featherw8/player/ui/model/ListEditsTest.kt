@@ -20,6 +20,13 @@ class ListEditsTest {
     }
 
     @Test
+    fun movesSeveralPlacesAtOnce() {
+        // A fast drag can cross more than one row between two frames.
+        assertEquals(listOf("c", "a", "b", "d"), list.moved(2, 0))
+        assertEquals(listOf("a", "d", "b", "c"), list.moved(3, 1))
+    }
+
+    @Test
     fun leavesTheListAloneForNoOpsAndBadIndices() {
         assertSame(list, list.moved(1, 1))
         assertSame(list, list.moved(-1, 2))
@@ -34,22 +41,24 @@ class ListEditsTest {
     }
 
     @Test
-    fun swapsTwoIds() {
-        assertEquals(listOf("a", "c", "b", "d"), list.swapped("b", "c"))
-        assertEquals(listOf("a", "c", "b", "d"), list.swapped("c", "b"))
+    fun movesAnIdOverAnother() {
+        assertEquals(listOf("a", "c", "b", "d"), list.movedOver("c", "b"))
+        assertEquals(listOf("a", "c", "b", "d"), list.movedOver("b", "c"))
+        assertEquals(listOf("d", "a", "b", "c"), list.movedOver("d", "a"))
     }
 
     @Test
-    fun swapsIdsThatAreNotNeighboursInTheStoredList() {
+    fun movesIdsThatAreNotNeighboursInTheStoredList() {
         // "b" and "c" look adjacent on screen when "x" (a deleted file) sits between them in storage.
         val stored = listOf("a", "b", "x", "c", "d")
-        assertEquals(listOf("a", "c", "x", "b", "d"), stored.swapped("b", "c"))
+        assertEquals(listOf("a", "c", "b", "x", "d"), stored.movedOver("c", "b"))
+        assertEquals(listOf("a", "x", "c", "b", "d"), stored.movedOver("b", "c"))
     }
 
     @Test
-    fun ignoresMissingIdsAndSelfSwaps() {
-        assertSame(list, list.swapped("a", "zzz"))
-        assertSame(list, list.swapped("zzz", "a"))
-        assertSame(list, list.swapped("a", "a"))
+    fun ignoresMissingIdsAndSelfMoves() {
+        assertSame(list, list.movedOver("a", "zzz"))
+        assertSame(list, list.movedOver("zzz", "a"))
+        assertSame(list, list.movedOver("a", "a"))
     }
 }

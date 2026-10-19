@@ -123,9 +123,8 @@ import com.featherw8.player.ui.theme.navColors
 import com.featherw8.player.ui.components.ChangeCoverDialog
 import com.featherw8.player.ui.components.DeletePlaylistDialog
 import com.featherw8.player.ui.components.DeleteTracksDialog
-import com.featherw8.player.ui.components.ListEditing
 import com.featherw8.player.ui.model.moved
-import com.featherw8.player.ui.model.swapped
+import com.featherw8.player.ui.model.movedOver
 import com.featherw8.player.ui.components.PlaylistActionsDialog
 import com.featherw8.player.ui.components.RenamePlaylistDialog
 import com.featherw8.player.ui.player.PlayerOverlays
@@ -383,9 +382,11 @@ internal fun FeatherW8App(
 
     // Playlist edits go by track id, not by position: the list on screen skips tracks whose file is
     // gone, so a position on screen is not a position in the stored playlist.
-    fun swapInPlaylist(playlistId: String, firstId: String, secondId: String) {
+    fun moveInPlaylist(playlistId: String, shown: List<MusicTrack>, from: Int, to: Int) {
+        val movingId = shown.getOrNull(from)?.id ?: return
+        val overId = shown.getOrNull(to)?.id ?: return
         persistPlaylists(userPlaylists.map {
-            if (it.id == playlistId) it.copy(trackIds = it.trackIds.swapped(firstId, secondId)) else it
+            if (it.id == playlistId) it.copy(trackIds = it.trackIds.movedOver(movingId, overId)) else it
         })
     }
 
@@ -984,17 +985,11 @@ internal fun FeatherW8App(
                                 },
                                 // Only a playlist the user made can be reordered; albums, artists and the
                                 // smart playlists are computed from the library.
-                                listEditing = detail.userPlaylistId?.let { playlistId ->
-                                    { index ->
-                                        ListEditing(
-                                            canMoveUp = index > 0,
-                                            canMoveDown = index < detail.tracks.lastIndex,
-                                            onMoveUp = { swapInPlaylist(playlistId, detail.tracks[index].id, detail.tracks[index - 1].id) },
-                                            onMoveDown = { swapInPlaylist(playlistId, detail.tracks[index].id, detail.tracks[index + 1].id) },
-                                            removeLabel = "Remove from playlist",
-                                            onRemove = { removeFromPlaylist(playlistId, detail.tracks[index].id) }
-                                        )
-                                    }
+                                onMoveTrack = detail.userPlaylistId?.let { playlistId ->
+                                    { from, to -> moveInPlaylist(playlistId, detail.tracks, from, to) }
+                                },
+                                onRemoveTrack = detail.userPlaylistId?.let { playlistId ->
+                                    { index -> detail.tracks.getOrNull(index)?.let { removeFromPlaylist(playlistId, it.id) } }
                                 }
                             )
                         } ?: EmptyCard("Playlist unavailable", "It may have been removed.")

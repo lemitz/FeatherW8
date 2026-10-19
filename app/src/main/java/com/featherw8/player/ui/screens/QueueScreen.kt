@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.ui.components.EmptyCard
+import com.featherw8.player.ui.components.ListEditing
 import com.featherw8.player.ui.components.TrackRow
 import com.featherw8.player.ui.theme.AmoledBlack
 import com.featherw8.player.ui.theme.MutedText
@@ -44,6 +46,8 @@ internal fun QueueScreen(
     queue: List<MusicTrack>,
     currentId: String?,
     onPlay: (Int) -> Unit,
+    onMove: (from: Int, to: Int) -> Unit,
+    onRemove: (index: Int) -> Unit,
     onOpenPlayer: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
@@ -86,7 +90,7 @@ internal fun QueueScreen(
             }
         }
         if (queue.isEmpty()) item { EmptyCard("Queue is empty", "Play a track from Library to start a queue.") }
-        items(queue, key = { it.id }, contentType = { "track" }) { track ->
+        itemsIndexed(queue, key = { _, track -> track.id }, contentType = { _, _ -> "track" }) { index, track ->
             // The current track stays marked while paused too: this is "where am I in the queue".
             val isCurrent = track.id == currentId
             TrackRow(
@@ -95,8 +99,20 @@ internal fun QueueScreen(
                 playing = isCurrent,
                 highlighted = isCurrent,
                 showPlays = false, // the queue has no counts to show; a constant "0x" on every row was wrong
-                onPlay = { onPlay(queue.indexOf(track)) },
-                onAction = {}
+                onPlay = { onPlay(index) },
+                onAction = {},
+                modifier = Modifier.animateItem(), // rows slide into place when one is moved
+                // The queue is for ordering what plays next, so its menu is about that only; the track
+                // actions (playlist, ringtone, share, delete) belong to the library and did nothing here.
+                editing = ListEditing(
+                    canMoveUp = index > 0,
+                    canMoveDown = index < queue.lastIndex,
+                    onMoveUp = { onMove(index, index - 1) },
+                    onMoveDown = { onMove(index, index + 1) },
+                    removeLabel = "Remove from queue",
+                    onRemove = { onRemove(index) }
+                ),
+                showTrackActions = false
             )
         }
         item {

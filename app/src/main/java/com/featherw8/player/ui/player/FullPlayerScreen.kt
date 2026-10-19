@@ -117,6 +117,8 @@ internal fun FullPlayerScreen(
     onClose: () -> Unit,
     onSwipeClose: () -> Unit,
     onPlayQueueTrack: (Int) -> Unit,
+    onMoveQueueTrack: (from: Int, to: Int) -> Unit,
+    onRemoveQueueTrack: (index: Int) -> Unit,
     onClearQueue: () -> Unit,
     onArtworkClick: (MusicTrack) -> Unit,
     onTrackInfo: (MusicTrack) -> Unit,
@@ -400,6 +402,8 @@ internal fun FullPlayerScreen(
                 queue = queue,
                 currentId = currentId,
                 onPlay = onPlayQueueTrack,
+                onMove = onMoveQueueTrack,
+                onRemove = onRemoveQueueTrack,
                 onOpenPlayer = { scope.launch { playerPagerState.animateScrollToPage(PlayerNowPlayingPage) } },
                 onClear = onClearQueue,
                 modifier = Modifier.systemBarsPadding()

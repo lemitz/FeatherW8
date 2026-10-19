@@ -25,6 +25,10 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +57,19 @@ import com.featherw8.player.ui.theme.FeatherRed
 import com.featherw8.player.ui.theme.MutedText
 import com.featherw8.player.ui.theme.PrimaryText
 
+/**
+ * Moving and removing a track in a list the user owns: the play queue or one of their playlists.
+ * Rows of lists that cannot be edited (library, albums, smart playlists) get none.
+ */
+internal class ListEditing(
+    val canMoveUp: Boolean,
+    val canMoveDown: Boolean,
+    val onMoveUp: () -> Unit,
+    val onMoveDown: () -> Unit,
+    val removeLabel: String,
+    val onRemove: () -> Unit
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun TrackRow(
@@ -61,6 +78,7 @@ internal fun TrackRow(
     playing: Boolean,
     onPlay: () -> Unit,
     onAction: (TrackAction) -> Unit,
+    modifier: Modifier = Modifier,
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
@@ -68,11 +86,15 @@ internal fun TrackRow(
     /** Marks the row as the one the player is on (tinted background), independent of [playing]. */
     highlighted: Boolean = false,
     /** Whether to show the play counter; lists that have no counts to show hide it. */
-    showPlays: Boolean = true
+    showPlays: Boolean = true,
+    /** Adds "move up / move down / remove" to the row's menu. */
+    editing: ListEditing? = null,
+    /** Whether the menu also offers the track actions (add to playlist, ringtone, share, delete). */
+    showTrackActions: Boolean = true
 ) {
     var menuExpanded by remember(track.id) { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
+        modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
             .background(if (highlighted) FeatherRed.copy(alpha = .12f) else Color.Transparent)
             .combinedClickable(
             onClick = { if (selectionMode) onToggleSelection() else onPlay() },
@@ -112,7 +134,12 @@ internal fun TrackRow(
                 IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Track options", tint = MutedText, modifier = Modifier.size(18.dp))
                 }
-                TrackOptionsDropdown(expanded = menuExpanded, onDismiss = { menuExpanded = false }) { action ->
+                TrackOptionsDropdown(
+                    expanded = menuExpanded,
+                    onDismiss = { menuExpanded = false },
+                    editing = editing,
+                    showTrackActions = showTrackActions
+                ) { action ->
                     menuExpanded = false
                     onAction(action)
                 }
@@ -180,13 +207,37 @@ internal fun TrackOptionsDropdown(
     expanded: Boolean,
     onDismiss: () -> Unit,
     showTrackInfo: Boolean = false,
+    editing: ListEditing? = null,
+    showTrackActions: Boolean = true,
     onAction: (TrackAction) -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, containerColor = CardBlack) {
-        DropdownMenuItem(text = { Text("Add to playlist") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }, onClick = { onAction(TrackAction.ADD_TO_PLAYLIST) })
-        if (showTrackInfo) DropdownMenuItem(text = { Text("Track info") }, leadingIcon = { Icon(Icons.Filled.Info, null) }, onClick = { onAction(TrackAction.INFO) })
-        DropdownMenuItem(text = { Text("Set as ringtone") }, leadingIcon = { Icon(Icons.Filled.Waves, null) }, onClick = { onAction(TrackAction.RINGTONE) })
-        DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Filled.Share, null) }, onClick = { onAction(TrackAction.SHARE) })
-        DropdownMenuItem(text = { Text("Delete file", color = FeatherRed) }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = FeatherRed) }, onClick = { onAction(TrackAction.DELETE) })
+        if (editing != null) {
+            DropdownMenuItem(
+                text = { Text("Move up") },
+                leadingIcon = { Icon(Icons.Filled.KeyboardArrowUp, null) },
+                enabled = editing.canMoveUp,
+                onClick = { onDismiss(); editing.onMoveUp() }
+            )
+            DropdownMenuItem(
+                text = { Text("Move down") },
+                leadingIcon = { Icon(Icons.Filled.KeyboardArrowDown, null) },
+                enabled = editing.canMoveDown,
+                onClick = { onDismiss(); editing.onMoveDown() }
+            )
+            DropdownMenuItem(
+                text = { Text(editing.removeLabel, color = FeatherRed) },
+                leadingIcon = { Icon(Icons.Filled.Close, null, tint = FeatherRed) },
+                onClick = { onDismiss(); editing.onRemove() }
+            )
+            if (showTrackActions) HorizontalDivider(color = MutedText.copy(alpha = .25f))
+        }
+        if (showTrackActions) {
+            DropdownMenuItem(text = { Text("Add to playlist") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }, onClick = { onAction(TrackAction.ADD_TO_PLAYLIST) })
+            if (showTrackInfo) DropdownMenuItem(text = { Text("Track info") }, leadingIcon = { Icon(Icons.Filled.Info, null) }, onClick = { onAction(TrackAction.INFO) })
+            DropdownMenuItem(text = { Text("Set as ringtone") }, leadingIcon = { Icon(Icons.Filled.Waves, null) }, onClick = { onAction(TrackAction.RINGTONE) })
+            DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Filled.Share, null) }, onClick = { onAction(TrackAction.SHARE) })
+            DropdownMenuItem(text = { Text("Delete file", color = FeatherRed) }, leadingIcon = { Icon(Icons.Filled.Delete, null, tint = FeatherRed) }, onClick = { onAction(TrackAction.DELETE) })
+        }
     }
 }

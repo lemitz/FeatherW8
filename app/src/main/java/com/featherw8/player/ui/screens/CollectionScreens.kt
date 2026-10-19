@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.ui.artwork.TrackArtwork
 import com.featherw8.player.ui.components.EmptyCard
+import com.featherw8.player.ui.components.ListEditing
 import com.featherw8.player.ui.components.SectionLabel
 import com.featherw8.player.ui.components.TrackRow
 import com.featherw8.player.ui.model.AlbumCollection
@@ -140,6 +142,8 @@ internal fun TrackCollectionDetailScreen(
     onPlayTrack: (Int) -> Unit,
     onTrackAction: (MusicTrack, TrackAction) -> Unit,
     onManage: (() -> Unit)? = null,
+    /** Moving and removing tracks; only given for a playlist the user can edit. */
+    listEditing: ((index: Int) -> ListEditing)? = null,
     bottomOverlayPadding: Dp = 0.dp
 ) {
     LazyColumn(
@@ -168,13 +172,16 @@ internal fun TrackCollectionDetailScreen(
         }
         item { SectionLabel("Tracks") }
         if (tracks.isEmpty()) item { EmptyCard("No tracks", "Add tracks from Library or scan internal storage.") }
-        items(tracks, key = { it.id }, contentType = { "track" }) { track ->
+        itemsIndexed(tracks, key = { _, track -> track.id }, contentType = { _, _ -> "track" }) { index, track ->
             TrackRow(
                 track = track,
                 plays = 0,
                 playing = false,
-                onPlay = { onPlayTrack(tracks.indexOf(track)) },
-                onAction = { onTrackAction(track, it) }
+                showPlays = false, // no counts here; a constant "0x" on every row was wrong
+                onPlay = { onPlayTrack(index) },
+                onAction = { onTrackAction(track, it) },
+                modifier = Modifier.animateItem(), // rows slide into place when one is moved
+                editing = listEditing?.invoke(index)
             )
         }
     }

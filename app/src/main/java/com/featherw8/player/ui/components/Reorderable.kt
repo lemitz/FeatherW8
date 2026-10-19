@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 
 /** How far, in pixels, the list scrolls per frame while a row is held near its top or bottom edge. */
@@ -138,13 +139,15 @@ internal fun rememberReorderState(
 }
 
 /** Draws the row at the finger while it is held (lifted, above its neighbours); a no-op otherwise. */
-internal fun Modifier.reorderLayer(state: ReorderState, key: Any): Modifier = graphicsLayer {
-    val held = state.draggedKey == key
-    translationY = state.translationFor(key)
-    scaleX = if (held) DRAGGED_ROW_SCALE else 1f
-    scaleY = scaleX
-    zIndex = if (held) 1f else 0f
-}
+internal fun Modifier.reorderLayer(state: ReorderState, key: Any): Modifier =
+    // Which row is held changes only when a drag starts or ends, so reading it while composing is cheap;
+    // the finger position changes every frame and is read in the layer, where it only redraws.
+    zIndex(if (state.draggedKey == key) 1f else 0f).graphicsLayer {
+        val held = state.draggedKey == key
+        translationY = state.translationFor(key)
+        scaleX = if (held) DRAGGED_ROW_SCALE else 1f
+        scaleY = scaleX
+    }
 
 /**
  * Long-press, then drag. Meant to sit *inside* the row's click handling: it then sees the touch first and

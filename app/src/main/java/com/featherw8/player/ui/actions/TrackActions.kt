@@ -95,6 +95,8 @@ internal fun MusicTrack.toMediaItem(): MediaItem = MediaItem.Builder()
             .setArtist(artist)
             .setAlbumTitle(album)
             .setArtworkUri(CustomArtworkStore.get(id) ?: artworkUri)
+            // For the play counter's 90 % rule when the player cannot tell the length of a file itself.
+            .setDurationMs(durationMs.takeIf { it > 0L })
             .build()
     )
     .build()

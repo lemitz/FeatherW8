@@ -129,6 +129,13 @@ DSF and uncompressed DSDIFF/DFF play like any other track. The pipeline is built
 
 Output is PCM, not native DSD (there is no DoP). The container parsers and the DSF bit-order handling are covered by unit tests ([`DsdExtractorTest.kt`](app/src/test/java/com/featherw8/player/audio/DsdExtractorTest.kt)).
 
+## Documentation
+
+- [User guide](docs/user-guide.md): install and update, every screen and gesture, the play queue, play counts, DSD files, privacy, troubleshooting
+- [How it works](docs/architecture.md): architecture, playback, the library scan, the DSD pipeline, caches, stored data
+- [Development](docs/development.md): build, test, CI, signing, versioning, releasing
+- [Changelog](CHANGELOG.md): what changed in every release
+
 ## Installation
 
 Download `FeatherW8-v<version>-arm64-v8a.apk` from the [Releases](https://github.com/lemitz/FeatherW8/releases) page and open it on the phone. The app is not on Google Play, so Android will ask you to allow installs from the app you opened the file with. Every release is an optimised build signed with the project's own key, so a newer release installs over the old one and keeps your favorites, playlists and play counts. Requirements: Android 9 (API 28) or newer and a 64-bit ARM (`arm64-v8a`) device.
@@ -204,7 +211,8 @@ app/src/main/
     third_party/dsd-nexus/       vendored libdsdpcm and libsautil (LGPL-2.1)
   assets/third_party_licenses/   LGPL text, shipped inside the APK
 app/src/test/                    DsdExtractorTest, ActualPlayCounterTest
-docs/                            screenshots and release notes
+docs/                            user guide, architecture and development docs (EN, RU), screenshots, release notes
+CHANGELOG.md                     what changed in every release
 .github/workflows/build.yml      tests and a signed release APK on every push; release on v* tags
 BUILD_LOCAL.md                   full local build instructions
 THIRD-PARTY-NOTICES.md           licenses of the bundled and linked components

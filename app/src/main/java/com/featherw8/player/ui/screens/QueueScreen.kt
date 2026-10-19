@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.ui.components.EmptyCard
+import com.featherw8.player.ui.components.rememberReorderState
 import com.featherw8.player.ui.components.TrackRow
 import com.featherw8.player.ui.theme.AmoledBlack
 import com.featherw8.player.ui.theme.MutedText
@@ -44,6 +46,8 @@ internal fun QueueScreen(
     queue: List<MusicTrack>,
     currentId: String?,
     onPlay: (Int) -> Unit,
+    onMove: (from: Int, to: Int) -> Unit,
+    onRemove: (index: Int) -> Unit,
     onOpenPlayer: () -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier
@@ -67,6 +71,12 @@ internal fun QueueScreen(
             listState.animateScrollToItem((target - QUEUE_CONTEXT_ROWS).coerceAtLeast(0))
         }
     }
+    val reorder = rememberReorderState(
+        listState = listState,
+        firstItemIndex = QUEUE_HEADER_ITEMS,
+        itemCount = queue.size,
+        onMove = onMove
+    )
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize().background(AmoledBlack),
@@ -86,7 +96,7 @@ internal fun QueueScreen(
             }
         }
         if (queue.isEmpty()) item { EmptyCard("Queue is empty", "Play a track from Library to start a queue.") }
-        items(queue, key = { it.id }, contentType = { "track" }) { track ->
+        itemsIndexed(queue, key = { _, track -> track.id }, contentType = { _, _ -> "track" }) { index, track ->
             // The current track stays marked while paused too: this is "where am I in the queue".
             val isCurrent = track.id == currentId
             TrackRow(
@@ -95,8 +105,14 @@ internal fun QueueScreen(
                 playing = isCurrent,
                 highlighted = isCurrent,
                 showPlays = false, // the queue has no counts to show; a constant "0x" on every row was wrong
-                onPlay = { onPlay(queue.indexOf(track)) },
-                onAction = {}
+                onPlay = { onPlay(index) },
+                onAction = {},
+                // The row being held is drawn at the finger; animating its placement as well would fight that.
+                modifier = if (reorder.draggedKey == track.id) Modifier else Modifier.animateItem(),
+                // Hold and drag to reorder; the cross takes the track out. The library's track menu
+                // (playlist, ringtone, share, delete) did nothing here and is gone.
+                reorder = reorder,
+                onRemove = { onRemove(index) }
             )
         }
         item {

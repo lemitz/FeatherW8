@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.featherw8.player.data.MusicTrack
 import com.featherw8.player.ui.artwork.TrackArtwork
 import com.featherw8.player.ui.components.EmptyCard
+import com.featherw8.player.ui.components.rememberReorderState
 import com.featherw8.player.ui.components.SectionLabel
 import com.featherw8.player.ui.components.TrackRow
 import com.featherw8.player.ui.model.AlbumCollection
@@ -140,8 +142,17 @@ internal fun TrackCollectionDetailScreen(
     onPlayTrack: (Int) -> Unit,
     onTrackAction: (MusicTrack, TrackAction) -> Unit,
     onManage: (() -> Unit)? = null,
+    /** Reordering and removing tracks (hold and drag, cross to remove); only given for a playlist the user made. */
+    onMoveTrack: ((from: Int, to: Int) -> Unit)? = null,
+    onRemoveTrack: ((index: Int) -> Unit)? = null,
     bottomOverlayPadding: Dp = 0.dp
 ) {
+    // The hero card and the "Tracks" label come before the first track.
+    val reorder = if (onMoveTrack != null) {
+        rememberReorderState(listState, firstItemIndex = 2, itemCount = tracks.size, onMove = onMoveTrack)
+    } else {
+        null
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -168,13 +179,18 @@ internal fun TrackCollectionDetailScreen(
         }
         item { SectionLabel("Tracks") }
         if (tracks.isEmpty()) item { EmptyCard("No tracks", "Add tracks from Library or scan internal storage.") }
-        items(tracks, key = { it.id }, contentType = { "track" }) { track ->
+        itemsIndexed(tracks, key = { _, track -> track.id }, contentType = { _, _ -> "track" }) { index, track ->
             TrackRow(
                 track = track,
                 plays = 0,
                 playing = false,
-                onPlay = { onPlayTrack(tracks.indexOf(track)) },
-                onAction = { onTrackAction(track, it) }
+                showPlays = false, // no counts here; a constant "0x" on every row was wrong
+                onPlay = { onPlayTrack(index) },
+                onAction = { onTrackAction(track, it) },
+                // The row being held is drawn at the finger; animating its placement as well would fight that.
+                modifier = if (reorder?.draggedKey == track.id) Modifier else Modifier.animateItem(),
+                reorder = reorder,
+                onRemove = if (reorder != null && onRemoveTrack != null) ({ onRemoveTrack(index) }) else null
             )
         }
     }

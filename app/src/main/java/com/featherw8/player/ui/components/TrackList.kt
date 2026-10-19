@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +55,9 @@ import com.featherw8.player.ui.theme.FeatherRed
 import com.featherw8.player.ui.theme.MutedText
 import com.featherw8.player.ui.theme.PrimaryText
 
+/** Background of the row that is being dragged: a little lighter than the screen, so it reads as lifted. */
+private val DraggedRowBackground = Color(0xFF26262B)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun TrackRow(
@@ -61,6 +66,7 @@ internal fun TrackRow(
     playing: Boolean,
     onPlay: () -> Unit,
     onAction: (TrackAction) -> Unit,
+    modifier: Modifier = Modifier,
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onLongClick: (() -> Unit)? = null,
@@ -68,16 +74,35 @@ internal fun TrackRow(
     /** Marks the row as the one the player is on (tinted background), independent of [playing]. */
     highlighted: Boolean = false,
     /** Whether to show the play counter; lists that have no counts to show hide it. */
-    showPlays: Boolean = true
+    showPlays: Boolean = true,
+    /**
+     * Makes the row part of a list the user can reorder: hold it and drag. Rows of such lists show a
+     * remove button ([onRemove]) in place of the track menu.
+     */
+    reorder: ReorderState? = null,
+    onRemove: (() -> Unit)? = null
 ) {
     var menuExpanded by remember(track.id) { mutableStateOf(false) }
+    val dragging = reorder != null && reorder.draggedKey == track.id
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp))
-            .background(if (highlighted) FeatherRed.copy(alpha = .12f) else Color.Transparent)
+        modifier = modifier
+            .then(if (reorder != null) Modifier.reorderLayer(reorder, track.id) else Modifier)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(15.dp))
+            .background(
+                when {
+                    dragging -> DraggedRowBackground
+                    highlighted -> FeatherRed.copy(alpha = .12f)
+                    else -> Color.Transparent
+                }
+            )
             .combinedClickable(
-            onClick = { if (selectionMode) onToggleSelection() else onPlay() },
-            onLongClick = onLongClick
-        ).padding(horizontal = 5.dp, vertical = 6.dp),
+                onClick = { if (selectionMode) onToggleSelection() else onPlay() },
+                onLongClick = onLongClick
+            )
+            // Inside the click handling on purpose: see reorderGesture.
+            .then(if (reorder != null) Modifier.reorderGesture(reorder, track.id) else Modifier)
+            .padding(horizontal = 5.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         TrackArtwork(track, 48.dp, RoundedCornerShape(12.dp))
@@ -104,6 +129,8 @@ internal fun TrackRow(
         }
         if (selectionMode) {
             SelectionCheckBox(checked = selected, modifier = Modifier.padding(horizontal = 5.dp))
+        } else if (onRemove != null) {
+            RemoveFromListButton(onClick = onRemove)
         } else {
             if (showPlays) {
                 Text("${plays}×", color = FeatherRed.copy(alpha = .8f), fontSize = 9.sp, modifier = Modifier.padding(horizontal = 2.dp))
@@ -117,6 +144,26 @@ internal fun TrackRow(
                     onAction(action)
                 }
             }
+        }
+    }
+}
+
+/**
+ * A quiet circle with a cross: takes the track out of the list it is in. Deliberately neutral. A solid
+ * accent-coloured button on every row shouted over the list, and the accent belongs to the track that is
+ * playing; a faint disc with a muted cross is there when you look for it and out of the way otherwise.
+ */
+@Composable
+internal fun RemoveFromListButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier.size(24.dp).clip(CircleShape).background(Color.White.copy(alpha = .09f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.Close, contentDescription = "Remove from list", tint = MutedText, modifier = Modifier.size(14.dp))
         }
     }
 }

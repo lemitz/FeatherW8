@@ -123,6 +123,8 @@ import com.featherw8.player.ui.theme.navColors
 import com.featherw8.player.ui.components.ChangeCoverDialog
 import com.featherw8.player.ui.components.DeletePlaylistDialog
 import com.featherw8.player.ui.components.DeleteTracksDialog
+import com.featherw8.player.ui.model.moved
+import com.featherw8.player.ui.model.movedOver
 import com.featherw8.player.ui.components.PlaylistActionsDialog
 import com.featherw8.player.ui.components.RenamePlaylistDialog
 import com.featherw8.player.ui.player.PlayerOverlays
@@ -378,6 +380,22 @@ internal fun FeatherW8App(
         preferences.edit().putString("user_playlists", encodePlaylists(next)).apply()
     }
 
+    // Playlist edits go by track id, not by position: the list on screen skips tracks whose file is
+    // gone, so a position on screen is not a position in the stored playlist.
+    fun moveInPlaylist(playlistId: String, shown: List<MusicTrack>, from: Int, to: Int) {
+        val movingId = shown.getOrNull(from)?.id ?: return
+        val overId = shown.getOrNull(to)?.id ?: return
+        persistPlaylists(userPlaylists.map {
+            if (it.id == playlistId) it.copy(trackIds = it.trackIds.movedOver(movingId, overId)) else it
+        })
+    }
+
+    fun removeFromPlaylist(playlistId: String, trackId: String) {
+        persistPlaylists(userPlaylists.map {
+            if (it.id == playlistId) it.copy(trackIds = it.trackIds - trackId) else it
+        })
+    }
+
     fun playTracks(items: List<MusicTrack>, startIndex: Int) {
         if (items.isEmpty()) {
             Toast.makeText(context, "No tracks match this list", Toast.LENGTH_SHORT).show()
@@ -449,6 +467,28 @@ internal fun FeatherW8App(
         playerOpen = false
         miniPlayerDragActive = false
         lastRootBackAt = 0L
+    }
+
+    // The queue the screen shows mirrors the player's playlist, so every edit is made on both.
+    fun moveQueueTrack(from: Int, to: Int) {
+        val activePlayer = controller ?: return
+        if (from == to || from !in queue.indices || to !in queue.indices) return
+        if (from >= activePlayer.mediaItemCount || to >= activePlayer.mediaItemCount) return
+        activePlayer.moveMediaItem(from, to)
+        queue = queue.moved(from, to)
+    }
+
+    fun removeQueueTrack(index: Int) {
+        val activePlayer = controller ?: return
+        if (index !in queue.indices || index >= activePlayer.mediaItemCount) return
+        if (queue.size == 1) {
+            // Removing the last track is the same as closing the player.
+            dismissMiniPlayer()
+            return
+        }
+        // Removing the track that is playing makes the player continue with the next one.
+        activePlayer.removeMediaItem(index)
+        queue = queue.toMutableList().apply { removeAt(index) }
     }
 
     fun handleTrackAction(track: MusicTrack, action: TrackAction) {
@@ -942,6 +982,14 @@ internal fun FeatherW8App(
                                 bottomOverlayPadding = bottomOverlayPadding,
                                 onManage = detail.userPlaylistId?.let { id ->
                                     { userPlaylists.firstOrNull { it.id == id }?.let { playlistForActions = it } }
+                                },
+                                // Only a playlist the user made can be reordered; albums, artists and the
+                                // smart playlists are computed from the library.
+                                onMoveTrack = detail.userPlaylistId?.let { playlistId ->
+                                    { from, to -> moveInPlaylist(playlistId, detail.tracks, from, to) }
+                                },
+                                onRemoveTrack = detail.userPlaylistId?.let { playlistId ->
+                                    { index -> detail.tracks.getOrNull(index)?.let { removeFromPlaylist(playlistId, it.id) } }
                                 }
                             )
                         } ?: EmptyCard("Playlist unavailable", "It may have been removed.")
@@ -979,6 +1027,8 @@ internal fun FeatherW8App(
                 playerOpen = false
             },
             onPlayQueueTrack = { index -> playTracks(queue, index) },
+            onMoveQueueTrack = { from, to -> moveQueueTrack(from, to) },
+            onRemoveQueueTrack = { index -> removeQueueTrack(index) },
             onClearQueue = { activeTrack ->
                 queue = listOf(activeTrack)
                 controller?.clearMediaItems()

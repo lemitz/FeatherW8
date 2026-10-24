@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground>
+        <!-- The artwork is a dark disc with a feather. It is enlarged so the disc covers the whole visible
+             area (the corners of the launcher's shape get the same dark colour from the background layer),
+             while the feather stays inside the 66dp safe zone. -->
+        <inset
+            android:drawable="@drawable/featherw8_icon"
+            android:inset="9%" />
+    </foreground>
+</adaptive-icon>

@@ -6,6 +6,11 @@ release notes in [`docs/release-notes/`](docs/release-notes).
 
 The project uses `MAJOR.MINOR.PATCH` versions; see [Versioning](docs/development.md#versioning).
 
+## 1.4.2 — 2026-10-25
+
+- The app icon no longer sits on a light plate: the launcher used to put the round icon on a white/grey
+  square. The dark disc now fills the whole icon shape and the feather is bigger, as in other apps.
+
 ## 1.4.1 — 2026-10-19
 
 - The play counter is now reliable on phones that slow an app down while the screen is off (Nothing OS in

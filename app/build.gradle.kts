@@ -5,7 +5,7 @@ plugins {
 
 // The only place a release version is written down (see "Versioning" in the README).
 // MAJOR.MINOR.PATCH; versionCode is derived from it so the two can never disagree.
-val appVersionName = "1.4.1"
+val appVersionName = "1.4.2"
 
 fun versionCodeOf(name: String): Int {
     val (major, minor, patch) = name.split('.').map { it.toInt() }

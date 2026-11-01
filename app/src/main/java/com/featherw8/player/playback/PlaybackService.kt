@@ -120,7 +120,10 @@ class PlaybackService : MediaSessionService() {
             Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN_PLAYER),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        mediaSession = MediaSession.Builder(this, player).setSessionActivity(openPlayer).build()
+        mediaSession = MediaSession.Builder(this, player)
+            .setSessionActivity(openPlayer)
+            .setBitmapLoader(ArtworkBitmapLoader(this))
+            .build()
         handler.post(countMonitor)
     }
 

@@ -6,6 +6,12 @@ release notes in [`docs/release-notes/`](docs/release-notes).
 
 The project uses `MAJOR.MINOR.PATCH` versions; see [Versioning](docs/development.md#versioning).
 
+## 1.4.3 — 2026-11-01
+
+- The cover now shows in the media card in the notification shade, on the lock screen and in the media
+  widget (it was missing on Nothing OS while the app itself showed it). The card now gets its cover the same
+  way the app does.
+
 ## 1.4.2 — 2026-10-25
 
 - The app icon no longer sits on a light plate: the launcher used to put the round icon on a white/grey

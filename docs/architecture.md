@@ -77,7 +77,7 @@ a small C++ library (CMake / NDK) for DSD-to-PCM conversion.
 | `ui/artwork/` | Cover loading, caches, the background warmer, user-chosen covers |
 | `ui/actions/` | Share, ringtone, delete, mapping a file from another app to a track, `MusicTrack → MediaItem` |
 
-Native code is in `app/src/main/cpp/`: `dsd_jni.cpp` (the JNI bridge), `external/libdsdpcm/` (bindings) and
+Native code is in `app/src/main/cpp/`: `dsd_jni.cpp` (the JNI bridge), `external/libdsdpcm/` (the vendored C++ core of the engine) and
 `third_party/dsd-nexus/` (the vendored LGPL-2.1 engine and utility library).
 
 ---

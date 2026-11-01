@@ -207,7 +207,7 @@ app/src/main/
     playback/PlaybackService.kt  сервис сессии Media3, ExoPlayer, сохранение повтора и перемешивания
   cpp/
     dsd_jni.cpp                  JNI-мост к конвертеру
-    external/libdsdpcm/          обвязка движка
+    external/libdsdpcm/          встроенное C++-ядро движка DSD (LGPL-2.1, без изменений)
     third_party/dsd-nexus/       встроенные libdsdpcm и libsautil (LGPL-2.1)
   assets/third_party_licenses/   текст LGPL, поставляется внутри APK
 app/src/test/                    DsdExtractorTest, ActualPlayCounterTest

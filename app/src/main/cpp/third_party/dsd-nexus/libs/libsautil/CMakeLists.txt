@@ -1,3 +1,9 @@
+# FeatherW8 modification notice (LGPL-2.1, section 2(a)):
+# This file differs from upstream DSD-Nexus (https://github.com/wichers/dsd-nexus,
+# libs/libsautil/CMakeLists.txt). For Android cross-builds it force-includes the
+# target's time.h from ${CMAKE_SYSROOT} instead of the host's /usr/include/time.h
+# (the comment above that block was reworded accordingly). Everything else in this
+# file is unchanged. See THIRD-PARTY-NOTICES.md in the repository root.
 cmake_minimum_required(VERSION 3.15)
 
 project(sautil C)

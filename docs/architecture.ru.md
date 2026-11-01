@@ -77,7 +77,7 @@ Kotlin, Jetpack Compose (Material 3), AndroidX Media3 (ExoPlayer, Session, Extra
 | `ui/artwork/` | Загрузка обложек, кэши, фоновый «прогреватель», выбранные пользователем обложки |
 | `ui/actions/` | Поделиться, рингтон, удаление, превращение файла из другого приложения в трек, `MusicTrack → MediaItem` |
 
-Нативный код лежит в `app/src/main/cpp/`: `dsd_jni.cpp` (JNI-мост), `external/libdsdpcm/` (обвязка) и
+Нативный код лежит в `app/src/main/cpp/`: `dsd_jni.cpp` (JNI-мост), `external/libdsdpcm/` (встроенное C++-ядро движка) и
 `third_party/dsd-nexus/` (встроенный движок под LGPL-2.1 и вспомогательная библиотека).
 
 ---

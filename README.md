@@ -207,7 +207,7 @@ app/src/main/
     playback/PlaybackService.kt  Media3 session service, ExoPlayer, repeat / shuffle persistence
   cpp/
     dsd_jni.cpp                  JNI bridge to the converter
-    external/libdsdpcm/          engine bindings
+    external/libdsdpcm/          vendored C++ core of the DSD engine (LGPL-2.1, unmodified)
     third_party/dsd-nexus/       vendored libdsdpcm and libsautil (LGPL-2.1)
   assets/third_party_licenses/   LGPL text, shipped inside the APK
 app/src/test/                    DsdExtractorTest, ActualPlayCounterTest

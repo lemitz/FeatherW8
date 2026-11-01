@@ -12,12 +12,19 @@ License, version 2.1**.
 - Full license text: [`app/src/main/assets/third_party_licenses/DSD-Nexus-LGPL-2.1.txt`](app/src/main/assets/third_party_licenses/DSD-Nexus-LGPL-2.1.txt)
   (also shipped inside the APK) and
   [`app/src/main/cpp/third_party/dsd-nexus/LICENSE`](app/src/main/cpp/third_party/dsd-nexus/LICENSE).
-- Only the library subset FeatherW8 needs (`libdsdpcm`, `libsautil`) is vendored in
-  [`app/src/main/cpp/third_party/dsd-nexus/`](app/src/main/cpp/third_party/dsd-nexus/);
-  the rest of DSD-Nexus (including the GPL-licensed Nexus Forge GUI) is not included.
-  The C++ glue used by FeatherW8 lives in
-  [`app/src/main/cpp/external/libdsdpcm/`](app/src/main/cpp/external/libdsdpcm/) and
-  [`app/src/main/cpp/dsd_jni.cpp`](app/src/main/cpp/dsd_jni.cpp).
+- Only the library subset FeatherW8 needs is vendored, in two places:
+  [`app/src/main/cpp/third_party/dsd-nexus/`](app/src/main/cpp/third_party/dsd-nexus/)
+  (`libsautil` and the C wrapper of `libdsdpcm`) and
+  [`app/src/main/cpp/external/libdsdpcm/`](app/src/main/cpp/external/libdsdpcm/)
+  (the C++ `dsdpcm_core` that the wrapper builds on). The rest of DSD-Nexus
+  (including the GPL-licensed Nexus Forge GUI) is not included.
+- Provenance: both directories were compared with upstream commit
+  [`b3f443d`](https://github.com/wichers/dsd-nexus/commit/b3f443d4c42ccf52806eb57def3b3a34805714bd)
+  (checked 2026-11-01). Every file is byte-for-byte identical to upstream except the one
+  listed under "Modifications to the LGPL code" below.
+- FeatherW8's own code (MIT) in this area is
+  [`app/src/main/cpp/dsd_jni.cpp`](app/src/main/cpp/dsd_jni.cpp) (the JNI bridge) and
+  [`app/src/main/cpp/CMakeLists.txt`](app/src/main/cpp/CMakeLists.txt).
 - Upstream components and their origins:
   - `libdsdpcm` — derived from the SACD Decoder plugin,
     Copyright (c) 2011–2023 Maxim V. Anisiutkin, LGPL-2.1-or-later.
@@ -29,9 +36,18 @@ License, version 2.1**.
 `libdsdpcm` and `libsautil` are built as CMake `OBJECT`/`STATIC` libraries and are
 linked into a single `libfeather_dsd.so` together with FeatherW8's JNI code. The
 complete corresponding source for that library — both the LGPL code and
-FeatherW8's own JNI code — is in this repository. You are free to modify the LGPL
+FeatherW8's own JNI code — is in this repository (for a released APK, at the matching
+`vX.Y.Z` tag). You are free to modify the LGPL
 components and rebuild the APK yourself by following [BUILD_LOCAL.md](BUILD_LOCAL.md);
 the build uses nothing that is not in this repository and the public Android SDK/NDK.
+
+### Modifications to the LGPL code
+
+FeatherW8 changes one upstream file, which LGPL-2.1 section 2(a) requires us to state:
+
+- `app/src/main/cpp/third_party/dsd-nexus/libs/libsautil/CMakeLists.txt`: for Android
+  cross-builds it force-includes the target's `time.h` from `` instead of
+  the host machine's `/usr/include/time.h`. The file carries a notice at the top.
 
 This notice is a good-faith summary, not legal advice.
 

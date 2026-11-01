@@ -46,7 +46,7 @@ the build uses nothing that is not in this repository and the public Android SDK
 FeatherW8 changes one upstream file, which LGPL-2.1 section 2(a) requires us to state:
 
 - `app/src/main/cpp/third_party/dsd-nexus/libs/libsautil/CMakeLists.txt`: for Android
-  cross-builds it force-includes the target's `time.h` from `` instead of
+  cross-builds it force-includes the target's `time.h` from `${CMAKE_SYSROOT}` instead of
   the host machine's `/usr/include/time.h`. The file carries a notice at the top.
 
 This notice is a good-faith summary, not legal advice.

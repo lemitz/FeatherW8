@@ -89,6 +89,8 @@ Android has no DSD decoder, so FeatherW8 brings its own: a custom Media3 extract
 - Permissions: audio access to scan the library, notifications for the playback controls and — only for *Set as ringtone* — the system *Modify system settings* permission
 - Two presses of Back exit the app from a top-level screen
 
+> **Nothing leaves the phone through FeatherW8.** It has no internet access, and your favorites, playlists and play counts stay in the app. Android's own backup may still copy them to your Google account if you use it. See [SECURITY.md](SECURITY.md).
+
 ## Gestures
 
 | Action | Gesture |

@@ -6,6 +6,11 @@ release notes in [`docs/release-notes/`](docs/release-notes).
 
 The project uses `MAJOR.MINOR.PATCH` versions; see [Versioning](docs/development.md#versioning).
 
+## 1.4.4 — 2026-11-27
+
+- Internal UI refactor: library scanning, navigation, playback/queue state and playlist coordination now live in focused files. No user-visible behavior or saved-data formats were intentionally changed.
+- Added JVM tests for visible-track filtering, unknown-duration handling and sorting.
+
 ## 1.4.3 — 2026-11-01
 
 - The cover now shows in the media card in the notification shade, on the lock screen and in the media

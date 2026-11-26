@@ -141,10 +141,10 @@ Versions are `MAJOR.MINOR.PATCH`, chosen by how much a change matters to someone
 The version is written **once**, in `app/build.gradle.kts`:
 
 ```kotlin
-val appVersionName = "1.4.1"
+val appVersionName = "1.4.4"
 ```
 
-and `versionCode` is derived from it (`1.4.1` → `10401`, that is `major × 10000 + minor × 100 + patch`), so the two
+and `versionCode` is derived from it (`1.4.4` → `10404`, that is `major × 10000 + minor × 100 + patch`), so the two
 cannot disagree and the code always grows with the version. The README's version badge is updated by hand with
 each release.
 

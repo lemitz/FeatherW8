@@ -141,10 +141,10 @@ gh secret set FEATHERW8_KEYSTORE_PASSWORD
 Версия записана **один раз**, в `app/build.gradle.kts`:
 
 ```kotlin
-val appVersionName = "1.4.1"
+val appVersionName = "1.4.4"
 ```
 
-а `versionCode` вычисляется из неё (`1.4.1` → `10401`, то есть `major × 10000 + minor × 100 + patch`), поэтому они не
+а `versionCode` вычисляется из неё (`1.4.4` → `10404`, то есть `major × 10000 + minor × 100 + patch`), поэтому они не
 могут разойтись, а код всегда растёт вместе с версией. Бейдж версии в README обновляется вручную с каждым релизом.
 
 ---

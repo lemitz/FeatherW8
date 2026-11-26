@@ -32,7 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.featherw8.player.ui.model.AppPage
+import com.featherw8.player.ui.AppPage
 import com.featherw8.player.ui.theme.CardBlack
 import com.featherw8.player.ui.theme.MutedText
 

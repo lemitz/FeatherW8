@@ -68,12 +68,16 @@ a small C++ library (CMake / NDK) for DSD-to-PCM conversion.
 | `data/ActualPlayCounter.kt` | The "really listened to 90 %" logic |
 | `data/PlayCountStore.kt`, `TrackInfoStore.kt` | Persisted play counts and measured bit rates |
 | `data/CoverDiskCache.kt` | JPEG thumbnail cache on disk |
-| `ui/FeatherW8App.kt` | The root composable: all app state, navigation, wiring of everything below |
+| `ui/FeatherW8App.kt` | Composition root: wires coordinator state/actions to the app shell, overlays, and dialogs |
+| `ui/LibraryCoordinator.kt` | Permission and scan lifecycle, library-derived collections, visible-track filtering |
+| `ui/NavigationCoordinator.kt` | App pages, pager/list state, tab synchronization, back handling |
+| `ui/PlaybackCoordinator.kt` | MediaController observation, queue state and playback actions |
+| `ui/PlaylistCoordinator.kt` | Favorites, persisted playlists, playlist edits and dialog flow state |
 | `ui/theme/` | Colors, accent options, device profile (Nothing / realme / generic), `FeatherW8Theme` |
-| `ui/model/` | UI types (`AppPage`, `SortMode`, collections, playlists), list helpers (`moved`, `movedOver`) |
-| `ui/screens/` | Library, Playlists, Albums/Artists/detail, Queue, Settings |
-| `ui/player/` | Full player, mini player, the overlay that hosts both |
-| `ui/components/` | Track row, dialogs, the reorder machinery |
+| `ui/model/` | UI models (`SortMode`, collections, playlists), pure list/filter helpers |
+| `ui/screens/` | `AppPageContent`, Library, Playlists, Albums/Artists/detail, Settings |
+| `ui/player/` | MediaController creation, full player, mini player, the overlay that hosts both |
+| `ui/components/` | Track row, dialog host and dialogs, reorder machinery |
 | `ui/artwork/` | Cover loading, caches, the background warmer, user-chosen covers |
 | `ui/actions/` | Share, ringtone, delete, mapping a file from another app to a track, `MusicTrack → MediaItem` |
 
@@ -99,15 +103,17 @@ One process, with these threads that matter:
 
 ## UI and state
 
-There is one activity, `MainActivity`, and no navigation library. `ui/FeatherW8App.kt` is the root composable;
-it owns essentially all the state in local `remember` / `rememberSaveable` variables and passes plain values and
-callbacks down to stateless screens.
+There is one activity, `MainActivity`, and no navigation library. `ui/FeatherW8App.kt` is the composition root,
+not a monolithic state owner. `LibraryCoordinator`, `NavigationCoordinator`, `PlaybackCoordinator`, and
+`PlaylistCoordinator` each own state and effects for one concern and expose values/actions to the root. The root
+wires these into the stateless `AppPageContent` screen renderer and `AppDialogsHost`. State remains Compose-owned;
+there is no ViewModel.
 
-**Pages.** `AppPage` (in `ui/model/UiModels.kt`) lists the destinations: `LIBRARY`, `PLAYLISTS`, `SETTINGS`,
+**Pages.** `AppPage` (in `ui/NavigationCoordinator.kt`) lists the destinations: `LIBRARY`, `PLAYLISTS`, `SETTINGS`,
 `ALBUMS`, `ARTISTS`, `ALBUM_DETAIL`, `ARTIST_DETAIL`, `PLAYLIST_DETAIL` (and a legacy `QUEUE` that is mapped to
-`LIBRARY` on start). The current page is `rememberSaveable`. The full player is not a page: it is an overlay
-(`PlayerOverlays`) shown while `playerOpen` is true, and inside it a two-page pager holds the player (page 0) and
-the queue (page 1).
+`LIBRARY` on start). `NavigationCoordinator` owns the `rememberSaveable` page and return destinations, pager/list
+state and back behavior. The full player is not a page: it is an overlay (`PlayerOverlays`) shown while `playerOpen`
+is true, and inside it a two-page pager holds the player (page 0) and the queue (page 1).
 
 **Library and Playlists tabs** are two pages of a `HorizontalPager`. The selected tab and the pager have to
 agree whichever one the user touches, which is subtle:
@@ -118,12 +124,13 @@ agree whichever one the user touches, which is subtle:
 - the neighbouring tab is kept composed (`beyondViewportPageCount = 1`) so switching never builds a page in the
   middle of the animation.
 
-**Derived state** is computed off the main thread and published back: the visible track list (filters, search,
-sort), albums and artists, smart playlists, play counts. When a rescan produces a list equal to the current one
-it is not assigned, so a return to the app does not re-run all of that.
+**Derived state** is computed off the main thread and published back by `LibraryCoordinator`: the visible track list
+(filters, search, sort), albums and artists, and smart playlists. When a rescan produces a list equal to the current
+one it is not assigned, so a return to the app does not re-run all of that. Play counts are observed by
+`PlaybackCoordinator` and supplied to the library coordinator for sorting and smart playlists.
 
-**Shared state vs. the player.** The play queue the UI shows is a `List<MusicTrack>` held by `FeatherW8App`
-that mirrors the player's playlist (see [Known limitations](#known-limitations)).
+**Shared state vs. the player.** `PlaybackCoordinator` owns the UI's `List<MusicTrack>` queue and mirrors edits to
+the player's playlist (see [Known limitations](#known-limitations)).
 
 **Style.** The theme is true black with a selectable accent (`LocalFeatherAccent`). On a Nothing phone the
 `NDot55` system typeface is used by default; `DeviceProfile` is detected from `Build` strings.
@@ -147,15 +154,15 @@ that mirrors the player's playlist (see [Known limitations](#known-limitations))
   tap on the notification card opens the app and the full player (see
   [Intents from outside](#intents-from-outside)).
 
-**Starting playback.** `playTracks(items, index)` in `FeatherW8App` sets the UI's queue, shows the player
-immediately with the chosen track, and builds the `MediaItem`s on `Dispatchers.Default` before handing them to
-the controller (`setMediaItems`, `prepare`, `play`), so the slide-in animation does not stall. A `MediaItem`
-carries the track's id as `mediaId`, its URI, title/artist/album, artwork URI (a user-chosen cover wins over the
-media index's) and the duration found by the library.
+**Starting playback.** `PlaybackCoordinator.playTracks(items, index)` updates the UI queue and optimistic snapshot,
+shows the player immediately with the chosen track, and builds the `MediaItem`s on `Dispatchers.Default` before
+handing them to the controller (`setMediaItems`, `prepare`, `play`), so the slide-in animation does not stall. A
+`MediaItem` carries the track's id as `mediaId`, its URI, title/artist/album, artwork URI (a user-chosen cover wins
+over the media index's) and the duration found by the library.
 
-**Editing the queue.** `moveQueueTrack` and `removeQueueTrack` apply the change to the controller
-(`moveMediaItem`, `removeMediaItem`) and to the UI's list together. Removing the last track dismisses the
-player, which also stops and clears it.
+**Editing the queue.** `PlaybackCoordinator` applies `moveQueueTrack` and `removeQueueTrack` to the controller
+(`moveMediaItem`, `removeMediaItem`) and to its UI list together. Removing the last track dismisses the player, which
+also stops and clears it.
 
 **Mini player.** `MiniPlayerBar` polls the controller's position every 250 ms while visible and playing (the
 state is local to the bar, so the rest of the screen does not recompose); a vertical drag follows the finger and
@@ -357,6 +364,7 @@ JVM unit tests (`app/src/test`), run by `./gradlew :app:testDebugUnitTest` and b
 | `DsdMetadataReaderTest` | Stream parameters, ID3 title/artist/album/cover (ASCII and UTF-16) for DSF and DSDIFF, `DIIN` fallback, the DSD rate label |
 | `ActualPlayCounterTest` | The 90 % rule, rare polling, unreported jumps, seeks, late pause, one count per track |
 | `ListEditsTest` | `moved` / `movedOver` including ids that are not neighbours in storage |
+| `VisibleTracksTest` | Track filtering, unknown-duration behavior and title/date/play-count sorting |
 
 Nothing here is an instrumented (on-device) test: the UI, the player service and the JNI converter are checked by
 hand on a device.
@@ -373,9 +381,9 @@ running in a test and fails to initialise on a plain JVM. The metadata tests set
   own. If the activity is recreated while music keeps playing (the app removed from recents and reopened from the
   notification, or a rotation), the queue screen starts empty even though the player still has its tracks,
   until you start playing from a list again. The current track itself is still found through the library.
-- **No ViewModel; one large root composable.** `FeatherW8App.kt` (about 1 100 lines) holds the state and the
-  logic. Parts that are only presentation have been extracted (dialogs, the player overlays, screens), but
-  the state itself has not, so most of it is `remember`-local and only some survives process death.
+- **No ViewModel.** State is split across Compose-owned library, navigation, playback and playlist coordinators,
+  with `FeatherW8App.kt` as a roughly 540-line composition root. State restoration still follows the existing
+  `remember` / `rememberSaveable` choices; this refactor does not make every transient state survive process death.
 - **Ids come from MediaStore.** A file re-indexed under a new id looks like a new track.
 - **DSD output is PCM**, not native DSD, and DST-compressed DSDIFF is not supported.
 - **Only the primary internal volume is scanned.**
